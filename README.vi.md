@@ -1,46 +1,37 @@
-#AOV_UABE_2022
-🎮Đây là một công cụ GUI dựa trên UnityPy có thể được sử dụng để trích xuất, xem trước, chỉnh sửa và xuất các tệp Assetbundle cho Arena of Valor.🕹️
+<!-- Vietnamese version -->
+# 🎮 UABE cho Arena of Valor (AOV_UABE_2022)
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python Version](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
+[![Web Version](https://img.shields.io/badge/🌐_Web_Version-Online-brightgreen.svg)](http://ld.ymkeji.xyz/)
+
+[繁體中文](README.md) | [English](README.en.md) | **Tiếng Việt**
+
 <div align="center">
 
-# 🎮UABE cho Arena of Valor
-
-[![Giấy phép: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Phiên bản Python](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
-[![Nền tảng](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
-[![Web](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
-[![Web](https://img.shields.io/badge/com/windows) Phiên bản](https://img.shields.io/badge/🌐_Web_Version-Online-brightgreen.svg)](http://ld.ymkeji.xyz/)
-
-**[Tiếng Trung Giản Thể](README.md)** | [Tiếng Anh](README.en.md) | [Tiếng Việt](README.vi.md)
-
-<img src="https://github.com/Alanshown/AOV_UABE_2022/blob/main/icon.ico" width="128" alt="UABE AOV Logo"/>
-
-### 🔧 Công cụ chỉnh sửa AssetBundle được thiết kế dành riêng cho Arena of Valor
+### 🔧 Trình chỉnh sửa AssetBundle đồ họa dành riêng cho Arena of Valor
 
 ---
 
-## 🌐 Trải nghiệm phiên bản web trực tuyến
+## 🌐 Trải nghiệm phiên bản web
 
-**Không cần tải xuống, hãy thử ngay!** Chúng tôi cung cấp phiên bản web đầy đủ chức năng của công cụ UABE:
+**Không cần tải xuống — mở ngay trong trình duyệt!** Phiên bản web của UABE đã đầy đủ tính năng như desktop:
 
-### 🚀 [Nhấp vào đây để truy cập phiên bản web của UABE](http://ld.ymkeji.xyz/)
+### 🚀 [Khởi chạy phiên bản web](http://ld.ymkeji.xyz/)
 
-**Tính năng của phiên bản web:**
+**Điểm nổi bật của web:**
+- ✨ Hoạt động ngay trên trình duyệt, không cần cài đặt
+- 🔐 Mọi thao tác xử lý cục bộ, bảo vệ quyền riêng tư
+- 📱 Tương thích đa nền tảng (Windows/Mac/Linux)
+- 🎯 Tính năng song hành với bản desktop
+- ⚡ Đáp ứng nhanh, thao tác mượt mà
 
-- ✨ Không cần cài đặt, sử dụng trực tiếp trên trình duyệt
-
-- 🔒 Xử lý dữ liệu cục bộ, bảo vệ quyền riêng tư và bảo mật
-
-- 📱 Hỗ trợ nhiều nền tảng (Windows / Mac / Linux)
-
-- 🎯 Chức năng hoàn toàn giống với phiên bản gốc Phiên bản máy tính để bàn
-
-- ⚡ Phản hồi nhanh, hoạt động mượt mà
-
-> 💡 **Mẹo**: Phiên bản web phù hợp cho trải nghiệm nhanh và các thao tác nhẹ. Đối với việc xử lý hàng loạt số lượng lớn tệp, chúng tôi khuyên bạn nên tải xuống phiên bản máy tính để bàn.
+> 💡 **Gợi ý**: Dùng web để thử nghiệm nhanh; với các tệp lớn hoặc xử lý hàng loạt, hãy sử dụng bản desktop.
 
 ---
 
-[📥 Tải xuống phiên bản máy tính để bàn](https://github.com/Alanshown/AOV_UABE_2022/releases/download/Latest/AOV_UABE_v2.0.0.zip) |
+[📥 Tải bản desktop](https://github.com/Alanshown/AOV_UABE_2022/releases/download/Latest/AOV_UABE_v2.0.0.zip)
 
 </div>
 
@@ -48,265 +39,182 @@
 
 ## 📋 Mục lục
 
-- [✨ Giới thiệu dự án](#-Giới thiệu dự án)
-
-- [🎯 Chức năng chính](#-Chức năng chính)
-
-- [🚀 Cách sử dụng](#-Cách sử dụng)
-
----
-
-## ✨ Giới thiệu dự án
-
-**UABE for Arena of Valor** là một công cụ chỉnh sửa đồ họa được thiết kế đặc biệt cho các tệp tài nguyên trò chơi của Arena of Valor. Dự án này là phiên bản được sửa đổi dựa trên khung **UnityPy** của [K0lb3](https://github.com/K0lb3), bổ sung hỗ trợ cho các quy trình mã hóa và giải mã dành riêng cho AOV.
-
-### 🌟 Các tính năng chính
-
-- 🎨 **Thiết kế giao diện người dùng hiện đại** - Giao diện đồ họa trực quan được xây dựng bằng Tkinter
-
-- 🔐 **Hỗ trợ mã hóa chuyên dụng cho AOV** - Hỗ trợ hoàn hảo các định dạng tài nguyên được mã hóa của Arena of Valor
-
-- 📁 **Xử lý hàng loạt** - Hỗ trợ các thao tác hàng loạt trên các tệp đơn lẻ và toàn bộ thư mục
-
-- 🖼️ **Hỗ trợ nhiều định dạng** - Hỗ trợ nhiều loại tài nguyên bao gồm Raw, Texture2D và Mesh
-
-- 🌍 **Giao diện đa ngôn ngữ** - Hỗ trợ tiếng Trung phồn thể, tiếng Trung giản thể, tiếng Anh và tiếng Việt
-
-- 🎯 **Chỉnh sửa chính xác** - Cho phép xuất, nhập và chỉnh sửa tài nguyên một cách chính xác
+- [✨ Tổng quan](#-tổng-quan)
+- [🎯 Tính năng cốt lõi](#-tính-năng-cốt-lõi)
+- [🚀 Cách sử dụng](#-cách-sử-dụng)
+- [💖 Hỗ trợ dự án](#-hỗ-trợ-dự-án)
 
 ---
 
-## 🎯 Các chức năng cốt lõi
+## ✨ Tổng quan
+
+**UABE cho Arena of Valor** là công cụ đồ họa dành riêng cho các AssetBundle của Liên Quân. Dự án xây dựng trên nền tảng nâng cấp **UnityPy** của [K0lb3](https://github.com/K0lb3), bổ sung luồng mã hóa/giải mã đặc thù cho AOV.
+
+### 🌟 Điểm nổi bật
+
+- 🎨 **Giao diện hiện đại** - Tkinter mang lại trải nghiệm trực quan
+- 🔐 **Hỗ trợ mã hóa AOV** - Xử lý hoàn toàn định dạng tài nguyên của Liên Quân
+- 📁 **Xử lý hàng loạt** - Mở tệp đơn lẻ hoặc toàn bộ thư mục
+- 🖼️ **Đa dạng tài nguyên** - Raw, Texture2D, Mesh và nhiều hơn nữa
+- 🌍 **Đa ngôn ngữ** - Hỗ trợ Tiếng Trung Phồn thể, Giản thể, Tiếng Anh, Tiếng Việt
+- 🎯 **Chỉnh sửa chính xác** - Xuất, nhập và điều chỉnh tài nguyên ngay trong GUI
+
+---
+
+## 🎯 Tính năng cốt lõi
 
 <table>
-
 <thead>
-
 <tr>
-<th width="20%">Các mô-đun chức năng</th>
-<th width="40%">Mô tả chức năng</th> width="20%">Các định dạng được hỗ trợ</th>
-<th Loại thao tác
-
+<th width="20%">Module</th>
+<th width="40%">Mô tả</th>
+<th width="20%">Định dạng</th>
+<th width="20%">Thao tác</th>
 </tr>
-
 </thead>
-
 <tbody>
-
 <tr>
-
-<td><strong>📤 Xuất dữ liệu thô</strong></td>
-
-<td>Xuất trực tiếp tệp dữ liệu thô, giữ nguyên thông tin cấu trúc tài nguyên đầy đủ</td>
-
+<td><strong>📤 Xuất Raw</strong></td>
+<td>Trích xuất dữ liệu thô mà không làm mất cấu trúc gốc</td>
 <td><code>.bytes</code></td>
-
 <td>Xuất</td>
-
+</tr>
 <tr>
-
-<td><strong>📥 Nhập dữ liệu thô</strong></td>
-
-<td>Nhập dữ liệu thô đã chỉnh sửa, thay thế tài nguyên trò chơi (đảm bảo khớp loại)</td>
-
+<td><strong>📥 Nhập Raw</strong></td>
+<td>Thay thế dữ liệu với file thô đã chỉnh sửa (phải cùng loại)</td>
 <td><code>.bytes</code></td>
-
 <td>Nhập</td>
-
+</tr>
 <tr>
-
-<td><strong>🖼️ Xuất hình ảnh</strong></td>
-
-<td>Chuyển tài nguyên xuất Texture2D dưới dạng hình ảnh chuẩn</strong></td> Định dạng
-
+<td><strong>🖼️ Xuất ảnh</strong></td>
+<td>Đổi Texture2D thành ảnh tiêu chuẩn</td>
 <td><code>.png</code></td>
-
 <td>Xuất</td>
-
 </tr>
-
 <tr>
-
-<td><strong>🎨 Nhập hình ảnh</strong></td>
-
-<td>Nhập hình ảnh tùy chỉnh để thay thế kết cấu trò chơi (Kích thước phải nhất quán)</td>
-
+<td><strong>🎨 Nhập ảnh</strong></td>
+<td>Thay hình tùy chỉnh, đảm bảo độ phân giải đồng nhất</td>
 <td><code>.png</code> <code>.jpg</code></td>
-
 <td>Nhập</td>
-
 </tr>
-
 <tr>
-
-<td><strong>🗿 Xuất lưới</strong></td>
-
-<td>Xuất tài nguyên mô hình 3D dưới dạng định dạng OBJ, có thể sử dụng trong phần mềm mô hình 3D</td>
-
+<td><strong>🗿 Xuất Mesh</strong></td>
+<td>Xuất lưới mô hình 3D sang OBJ để mở bằng phần mềm khác</td>
 <td><code>.obj</code></td>
-
 <td>Xuất</td>
-
 </tr>
-
 <tr>
-
-<td><strong>👁️ Tài nguyên Xem trước</strong></td>
-
-<td>Xem trước hình ảnh và mô hình 3D theo thời gian thực, hỗ trợ kết xuất OpenGL
-
-<td>Nhiều định dạng</td>
-
+<td><strong>👁️ Xem trước</strong></td>
+<td>Kết xuất hình ảnh và mô hình 3D bằng OpenGL</td>
+<td>Nhiều loại</td>
 <td>Xem</td>
-
 </tr>
-
 <tr>
-
-<td><strong>💾 Lưu và Thoát</strong></td>
-
-<td>Lưu tất cả các thay đổi vào một tệp AssetBundle mới</td>
-
+<td><strong>💾 Lưu & Thoát</strong></td>
+<td>Lưu mọi thay đổi vào AssetBundle mới</td>
 <td><code>.assetbundle</code></td>
-
 <td>Lưu</td>
-
 </tr>
-
 <tr>
-
-<td><strong>📂 Thao tác hàng loạt</strong></td>
-
-<td>Hỗ trợ mở toàn bộ thư mục và xử lý hàng loạt nhiều tệp AssetBundle</td>
-
+<td><strong>📂 Hàng loạt</strong></td>
+<td>Mở thư mục và xử lý nhiều tệp cùng lúc</td>
 <td>Thư mục</td>
-
-<td>Xử lý hàng loạt</td>
-
+<td>Hàng loạt</td>
 </tr>
-
 </tbody>
-
 </table>
+
+---
 
 ## 🚀 Cách sử dụng
 
-### Cơ bản Luồng hoạt động
+### Luồng hoạt động
 
 ```mermaid
-đồ thị LR
-
-A[Khởi động chương trình] --> B[Chọn tệp/thư mục]
-
+graph LR
+A[Khởi chạy chương trình] --> B[Chọn tệp hoặc thư mục]
 B --> C[Xem danh sách tài nguyên]
-
 C --> D[Chọn tài nguyên]
-
-D --> E[Loại thao tác]
-
-E -->|Xuất| F[Chọn vị trí lưu]
-
+D --> E{Loại thao tác}
+E -->|Xuất| F[Chọn nơi lưu]
 E -->|Nhập| G[Chọn tệp thay thế]
-
-E -->|Xem trước| H[Xem tài nguyên]
-
-F --> I[Hoàn tất]
-
-G --> J[Lưu và thoát]
-
+E -->|Xem| H[Xem tài nguyên]
+F --> I[Hoàn thành]
+G --> J[Lưu & Thoát]
 H --> C
-
 J --> I
 ```
 
-### Các bước chi tiết
+### Các bước cụ thể
 
-#### 1️⃣ Cài đặt các thư viện phụ thuộc và khởi động lại chương trình
+#### 1️⃣ Cài phụ thuộc và khởi động
+- Chạy `pip install -r requirements.txt`
+- Thực thi `python main.py`
+- Hoặc tải [📥 bản desktop](https://github.com/Alanshown/AOV_UABE_2022/releases/download/Latest/AOV_UABE_v2.0.0.zip) và chạy EXE
 
-- Cài đặt các thư viện phụ thuộc vào đường dẫn dự án: pip install -r requirements.txt
+#### 2️⃣ Mở tài nguyên
 
-- Chạy tệp `python main.py` (tệp chính)
+**Tệp đơn lẻ**:
+- Menu → `File` → `Open File` → chọn `.assetbundle`
 
-- Hoặc tải trực tiếp gói nén [📥Phiên bản máy tính để bàn](https://github.com/Alanshown/AOV_UABE_2022/releases/download/Latest/AOV_UABE_v2.0.0.zip), giải nén và nhấp đúp vào tệp exe.
+**Thư mục**:
+- Menu → `File` → `Open Directory` → chọn thư mục chứa nhiều `.assetbundle`
 
-#### 2️⃣ Mở Tệp Tài Nguyên
+#### 3️⃣ Xem chi tiết
 
-**Phương pháp A: Mở Một Tệp**
+- Nhấn `Info` trên giao diện chính
+- Xem toàn bộ tài nguyên trong cửa sổ bật lên
+- Sắp xếp theo tên/loại/kích thước
 
-- Nhấp vào thanh menu `Tệp` → `Mở Tệp`
+#### 4️⃣ Thực hiện thao tác
 
-- Chọn tệp `.assetbundle`
-
-**Phương pháp B: Mở Toàn Bộ Thư Mục**
-
-- Nhấp vào thanh menu `Tệp` → `Mở Thư Mục`
-
-- Chọn thư mục chứa nhiều tệp `.assetbundle`
-
-#### 3️⃣ Duyệt Danh Sách Tài Nguyên
-
-- Nhấp vào nút `Thông Tin` trên giao diện chính
-
-- Xem tất cả tài nguyên trong cửa sổ danh sách tài nguyên bật lên
-
-- Sắp xếp theo tên, loại, kích thước, v.v.
-
-#### 4️⃣ Thực Hiện Các Thao Tác
-
-**Xuất Tài Nguyên**
-
-1. Chọn tài nguyên cần xuất trong danh sách
-
-2. Nhấp vào nút xuất tương ứng ở bên phải
-
+**Xuất**:
+1. Chọn tài nguyên
+2. Nhấn nút xuất liên quan
 3. Chọn vị trí lưu
 
-**Nhập Tài Nguyên**
+**Nhập**:
+1. Chọn tài nguyên
+2. Nhấn nút nhập tương ứng
+3. Chọn tệp thay thế
+4. Xác nhận ghi đè
 
-1. Chọn tài nguyên cần nhập trong danh sách
+**Xem trước**:
+- Chọn tài nguyên để xem
+- Panel bên phải hiển thị tự động
+- Dùng chuột xoay khi xem Mesh trong 3D
 
-2. Nhấp vào nút nhập tương ứng nút bên phải
+#### 5️⃣ Lưu kết quả
 
-3. Chọn tệp cần nhập
+- Nhấn `Save & Exit`
+- Chọn thư mục đầu ra
+- Chương trình tạo AssetBundle đã chỉnh sửa
 
-4. Xác nhận thay thế
+---
 
-**Xem trước tài nguyên**
+### 🔑 Tài nguyên được hỗ trợ
 
-- Chọn tài nguyên trong danh sách
-
-- Bản xem trước sẽ tự động xuất hiện ở bảng bên phải
-
-- Đối với mô hình 3D, bạn có thể dùng chuột để xoay và xem.
-
-#### 5️⃣ Lưu thay đổi
-
-- Sau khi hoàn tất tất cả các thay đổi, hãy nhấp vào nút `Lưu và Thoát`.
-
-- Chọn thư mục đầu ra.
-
-- Chương trình sẽ tạo tệp AssetBundle đã được sửa đổi.
-
-### 🔑 Các loại tài nguyên được hỗ trợ
-
-| Loại tài nguyên | Mô tả | Hỗ trợ thao tác |
-
+| Tài nguyên | Mô tả | Thao tác |
 |---------|------|---------|
-
-| **Texture2D** | Tài nguyên kết cấu 2D | ✅ Xuất / ✅ Nhập / ✅ Xem trước |
-
-| **Sprite** | Tài nguyên Sprite | ✅ Xuất
-
-| **Mesh** | Lưới mô hình 3D | ✅ Xuất / ✅ Xem trước |
-
-| **TextAsset** | Tài nguyên văn bản | ✅ Xuất / ✅ Nhập |
-
-| **AnimationClip** | Đoạn phim hoạt hình | ✅ Xuất |
-
+| **Texture2D** | Tài nguyên 2D | ✅ Xuất / ✅ Nhập / ✅ Xem |
+| **Sprite** | Đồ họa sprite | ✅ Xuất / ✅ Nhập |
+| **Mesh** | Lưới 3D | ✅ Xuất / ✅ Xem |
+| **TextAsset** | Tệp văn bản | ✅ Xuất / ✅ Nhập |
+| **AnimationClip** | Clip hoạt ảnh | ✅ Xuất |
 | **AudioClip** | Tài nguyên âm thanh | ✅ Xuất |
-
-| **Material** | Tài nguyên vật liệu | ✅ Xem |
-
+| **Material** | Vật liệu | ✅ Xem |
 | **Shader** | Shader | ✅ Xem |
 
 ---
+
+## 💖 Hỗ trợ dự án
+
+<div align="center">
+  <div style="background: radial-gradient(circle at top, rgba(255,255,255,0.25), rgba(0,0,0,0.65)), linear-gradient(135deg, #1c1c1c, #121212); padding: 24px; border-radius: 24px; box-shadow: 0 0 40px rgba(0,0,0,0.75); max-width: 420px;">
+    <div style="position: relative; display: inline-block;">
+      <img src="https://github.com/Alanshown/AOV_UABE_2022/blob/main/UI/QR_Code.jpg" alt="Mã QR hỗ trợ" style="width: 320px; border-radius: 16px; border: 4px solid rgba(255,255,255,0.2);">
+      <div style="position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,0.7); color: #fff; padding: 4px 10px; border-radius: 10px; font-weight: 600; font-size: 14px;">Mời tôi uống cà phê / Buy me coffee</div>
+    </div>
+    <p style="margin: 16px 0 0; color: #f0f0f0;">Nếu công cụ hữu ích, một ly cà phê là động lực để chúng tôi tiếp tục cập nhật!</p>
+  </div>
+</div>
