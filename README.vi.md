@@ -11,7 +11,7 @@
 
 **[Tiếng Trung giản thể](README.md)** | [Tiếng Anh](README.en.md) | [Tiếng Việt](README.vi.md)
 
-<img src="https://github.com/Alanshown/AOV_UABE_2022/icon.ico" width="128" alt="Logo UABE AOV"/>
+<img src="https://github.com/Alanshown/AOV_UABE_2022/blob/main/icon.ico" width="128" alt="Logo UABE AOV"/>
 
 ### 🔧 Công cụ chỉnh sửa AssetBundle được thiết kế dành riêng cho Arena of Valor
 
