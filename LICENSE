@@ -1,6 +1,9 @@
 MIT License
 
-Copyright (c) 2026 Alanshown
+Copyright (c) 2025 KennyYang0726
+
+This project is based on and modified from the project Copyright (c) 2019-2021 UnityPy by K0lb3. The modifications include:
+1. GUI interface(alike UABE) for ONLY Arena of valor assetbundle file
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
