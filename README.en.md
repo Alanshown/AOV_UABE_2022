@@ -13,13 +13,13 @@
 
 <img src="https://github.com/Alanshown/AOV_UABE_2022/blob/main/icon.ico" width="128" alt="UABE AOV Logo"/>
 
-### 🔧 An AssetBundle editing tool designed specifically for Arena of Valor
+### 🔧 An AssetBundle Editing Tool Designed Specifically for Arena of Valor
 
 ---
 
-## 🌐 Try the web version online
+## 🌐 Experience the Web Version Online
 
-**No download required, try it now!** **We offer a fully functional web-based version of the UABE tool:**
+**No download required, try it now!** We offer a fully functional web version of the UABE tool:
 
 ### 🚀 [Click to access the web version of UABE](http://ld.ymkeji.xyz/)
 
@@ -35,7 +35,7 @@
 
 - ⚡ Fast response, smooth operation
 
-> 💡 **Tip:** The web version is suitable for quick experience and lightweight operations. For batch processing of large numbers of files, we recommend downloading the desktop version.
+> 💡 **Tip**: The web version is suitable for quick experience and lightweight operations. For batch processing of large numbers of files, we recommend downloading the desktop version.
 
 ---
 
@@ -51,25 +51,7 @@
 
 - [🎯 Core Functions](#-Core Functions)
 
-- [🖼️ Function Preview](#️-Function Preview)
-
-- [📦 Installation Guide](#-Installation Guide)
-
-- [🚀 Usage Instructions](#-Usage Instructions)
-
-- [🔍 Function Details](#-Function Details)
-
-- [🛠️ Technical Architecture](#️-Technical Architecture)
-
-- [📂 Project Structure](#-Project Structure)
-
-- [⚙️ Development Guide](#️-Development Guide)
-
-- [🤝 Contribution Guide](#-Contribution Guide)
-
-- [📜 [Open Source License](#-Open Source License)
-
-- [🙏 Acknowledgements](#-Acknowledgements)
+- [🚀 Usage](#-Usage)
 
 ---
 
@@ -215,21 +197,21 @@
 graph LR
 A[Start program] --> B[Select file/directory]
 
-B --> C [View resource list]
+B --> C [View Resource List]
 
-C --> D [Select resource]
+C --> D [Select Resource]
 
-D --> E {Operation type}
+D --> E {Operation Type}
 
-E --> |Export| F [Select save location]
+E --> |Export| F [Select Save Location]
 
-E --> |Import| G [Select replacement file]
+E --> |Import| G [Select Replace File]
 
-E --> |Preview| H [View resource]
+E --> |Preview| H [View Resource]
 
 F --> I [Done]
 
-G --> J [Save and exit]
+G --> J [Save and Exit]
 
 H --> C
 
@@ -239,27 +221,29 @@ J --> I
 
 ### Detailed Steps
 
-#### 1️⃣ Install dependencies and restart the program
+#### 1️⃣ Install Dependencies and Restart the Program
 
 - Install dependencies in the project path: pip install -r requirements.txt
 
 - Execute `python main.py` (main file)
 
-#### 2️⃣ Open resource files
+- Or directly download the [📥Desktop Version](https://github.com/Alanshown/AOV_UABE_2022/releases/download/Latest/AOV_UABE_v2.0.0.zip) | compressed package, extract it, and double-click the exe program.
 
-**Method A: Open a single file**
+#### 2️⃣ Open Resource Files
 
-- Click the menu bar `File` → `Open file`
+**Method A: Open a Single File**
+
+- Click the menu bar `File` → `Open File`
 
 - Select the `.assetbundle` file
 
-**Method B: Open an entire directory**
+**Method B: Open an Entire Directory**
 
-- Click the menu bar `File` → `Open directory`
+- Click the menu bar `File` → `Open Directory`
 
 - Select the folder containing multiple `.assetbundle` files
 
-#### 3️⃣ Browse Resource List
+#### 3️⃣ Browse the Resource List
 
 - Click the `Info` button on the main interface
 
@@ -297,9 +281,9 @@ J --> I
 
 #### 5️⃣ Save Changes
 
-- After completing all changes, click the `Save and Exit` button
+- After completing all changes, click the `Save and Exit` button.
 
-- Select the output directory
+- Select the output directory.
 
 - The program will generate the modified AssetBundle file.
 
@@ -309,20 +293,20 @@ J --> I
 
 |---------|------|---------|
 
-| **Texture2D** | 2D Texture Resources | ✅ Export / ✅ Import / ✅ Preview |
+| **Texture2D** | 2D Texture Resource | ✅ Export / ✅ Import / ✅ Preview |
 
-| **Sprite** | Sprite Resources | ✅ Export / ✅ Preview |
+| **Sprite** | Sprite Resource | ✅ Export
 
-| **Mesh** | 3D Model Mesh | ✅ Export 
+| **Mesh** | 3D Model Mesh | ✅ Export / ✅ Preview |
 
-| **TextAsset** | Text Resources | ✅ Export / ✅ Import |
+| **TextAsset** | Text Resource | ✅ Export / ✅ Import |
 
-| **AnimationClip** | Animation Clips | ✅ Export |
+| **AnimationClip** | Animation Clip | ✅ Export |
 
-| **AudioClip** | Audio Resources | ✅ Export |
+| **AudioClip** | Audio Resource | ✅ Export |
 
-| **Material** | Material Resources | ✅ View |
+| **Material** | Material Resource | ✅ View |
 
-| **Shader** | Shaders | ✅ View |
+| **Shader** | Shader | ✅ View |
 
 ---

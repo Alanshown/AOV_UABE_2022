@@ -46,17 +46,7 @@
 
 - [✨ 项目简介](#-项目简介)
 - [🎯 核心功能](#-核心功能)
-- [🖼️ 功能预览](#️-功能预览)
-- [📦 安装指南](#-安装指南)
 - [🚀 使用方式](#-使用方式)
-- [🔍 功能详解](#-功能详解)
-- [🛠️ 技术架构](#️-技术架构)
-- [📂 项目结构](#-项目结构)
-- [⚙️ 开发指南](#️-开发指南)
-- [🤝 贡献指南](#-贡献指南)
-- [📜 开源协议](#-开源协议)
-- [🙏 致谢](#-致谢)
-
 ---
 
 ## ✨ 项目简介
@@ -163,7 +153,7 @@ J --> I
 #### 1️⃣ 安装依赖再启动程序
 - 项目路径下安装依赖 pip install -r requirements.txt
 - 执行 `python main.py`（主文件）
-- 或者直接下载[桌面版]((https://github.com/Alanshown/AOV_UABE_2022/releases/download/Latest/AOV_UABE_v2.0.0.zip))压缩包，解压后双击exe程序即可
+- 或者直接下载[📥桌面版](https://github.com/Alanshown/AOV_UABE_2022/releases/download/Latest/AOV_UABE_v2.0.0.zip) |压缩包，解压后双击exe程序即可
 
 #### 2️⃣ 打开资源文件
 
@@ -220,3 +210,14 @@ J --> I
 | **Shader** | 着色器 | ✅ 查看 |
 
 ---
+## 💖 支持我一下
+
+<div align="center">
+  <div style="background: radial-gradient(circle at top, rgba(255,255,255,0.25), rgba(0,0,0,0.65)), linear-gradient(135deg, #1c1c1c, #121212); padding: 24px; border-radius: 24px; box-shadow: 0 0 40px rgba(0,0,0,0.75); max-width: 420px;">
+    <div style="position: relative; display: inline-block;">
+      <img src="https://github.com/Alanshown/AOV_UABE_2022/blob/main/UI/QR_Code.jpg" alt="赞赏码" style="width: 320px; border-radius: 16px; border: 4px solid rgba(255,255,255,0.2);">
+      <div style="position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,0.7); color: #fff; padding: 4px 10px; border-radius: 10px; font-weight: 600; font-size: 14px;">请我喝咖啡 / Buy me coffee</div>
+    </div>
+    <p style="margin: 16px 0 0; color: #f0f0f0;">如果本工具对你有帮助，欢迎用一杯咖啡的代价支持一下作者，这份鼓励会让我们继续优化体验！</p>
+  </div>
+</div>

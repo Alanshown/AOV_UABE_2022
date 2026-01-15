@@ -4,22 +4,23 @@
 
 # 🎮UABE cho Arena of Valor
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python Version](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
-[![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
-[![Web Version](https://img.shields.io/badge/🌐_Web_Version-Online-brightgreen.svg)](http://ld.ymkeji.xyz/)
+[![Giấy phép: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Phiên bản Python](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![Nền tảng](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
+[![Web](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
+[![Web](https://img.shields.io/badge/com/windows) Phiên bản](https://img.shields.io/badge/🌐_Web_Version-Online-brightgreen.svg)](http://ld.ymkeji.xyz/)
 
-**[Tiếng Trung giản thể](README.md)** | [Tiếng Anh](README.en.md) | [Tiếng Việt](README.vi.md)
+**[Tiếng Trung Giản Thể](README.md)** | [Tiếng Anh](README.en.md) | [Tiếng Việt](README.vi.md)
 
-<img src="https://github.com/Alanshown/AOV_UABE_2022/blob/main/icon.ico" width="128" alt="Logo UABE AOV"/>
+<img src="https://github.com/Alanshown/AOV_UABE_2022/blob/main/icon.ico" width="128" alt="UABE AOV Logo"/>
 
 ### 🔧 Công cụ chỉnh sửa AssetBundle được thiết kế dành riêng cho Arena of Valor
 
 ---
 
-## 🌐 Thử phiên bản web trực tuyến
+## 🌐 Trải nghiệm phiên bản web trực tuyến
 
-**Không cần tải xuống, hãy thử ngay!** **Chúng tôi cung cấp phiên bản web đầy đủ chức năng của công cụ UABE:**
+**Không cần tải xuống, hãy thử ngay!** Chúng tôi cung cấp phiên bản web đầy đủ chức năng của công cụ UABE:
 
 ### 🚀 [Nhấp vào đây để truy cập phiên bản web của UABE](http://ld.ymkeji.xyz/)
 
@@ -31,11 +32,11 @@
 
 - 📱 Hỗ trợ nhiều nền tảng (Windows / Mac / Linux)
 
-- 🎯 Chức năng hoàn toàn giống với phiên bản máy tính để bàn
+- 🎯 Chức năng hoàn toàn giống với phiên bản gốc Phiên bản máy tính để bàn
 
 - ⚡ Phản hồi nhanh, hoạt động mượt mà
 
-> 💡 **Mẹo:** Phiên bản web phù hợp cho trải nghiệm nhanh và các thao tác nhẹ nhàng. Đối với việc xử lý hàng loạt số lượng lớn tập tin, chúng tôi khuyên bạn nên tải xuống phiên bản máy tính để bàn.
+> 💡 **Mẹo**: Phiên bản web phù hợp cho trải nghiệm nhanh và các thao tác nhẹ. Đối với việc xử lý hàng loạt số lượng lớn tệp, chúng tôi khuyên bạn nên tải xuống phiên bản máy tính để bàn.
 
 ---
 
@@ -49,27 +50,9 @@
 
 - [✨ Giới thiệu dự án](#-Giới thiệu dự án)
 
-- [🎯 Chức năng cốt lõi](#-Chức năng cốt lõi)
+- [🎯 Chức năng chính](#-Chức năng chính)
 
-- [🖼️ Tổng quan chức năng](#️-Tổng quan chức năng)
-
-- [📦 Hướng dẫn cài đặt](#-Hướng dẫn cài đặt)
-
-- [🚀 Hướng dẫn sử dụng](#-Hướng dẫn sử dụng)
-
-- [🔍 Chi tiết chức năng](#-Chi tiết chức năng)
-
-- [🛠️ Kiến trúc kỹ thuật](#️-Kiến trúc kỹ thuật)
-
-- [📂 Cấu trúc dự án](#-Cấu trúc dự án)
-
-- [⚙️ Hướng dẫn phát triển](#️-Hướng dẫn phát triển)
-
-- [🤝 Hướng dẫn đóng góp](#-Hướng dẫn đóng góp)
-
-- [📜 [Giấy phép mã nguồn mở](#-Giấy phép mã nguồn mở)
-
-- [🙏 Lời cảm ơn](#-Lời cảm ơn)
+- [🚀 Cách sử dụng](#-Cách sử dụng)
 
 ---
 
@@ -242,45 +225,47 @@ J --> I
 
 - Cài đặt các thư viện phụ thuộc vào đường dẫn dự án: pip install -r requirements.txt
 
-- Chạy `python main.py` (tệp chính)
+- Chạy tệp `python main.py` (tệp chính)
 
-#### 2️⃣ Mở các tệp tài nguyên
+- Hoặc tải trực tiếp gói nén [📥Phiên bản máy tính để bàn](https://github.com/Alanshown/AOV_UABE_2022/releases/download/Latest/AOV_UABE_v2.0.0.zip), giải nén và nhấp đúp vào tệp exe.
 
-**Phương pháp A: Mở một tệp**
+#### 2️⃣ Mở Tệp Tài Nguyên
 
-- Nhấp vào thanh menu `Tệp` → `Mở tệp`
+**Phương pháp A: Mở Một Tệp**
+
+- Nhấp vào thanh menu `Tệp` → `Mở Tệp`
 
 - Chọn tệp `.assetbundle`
 
-**Phương pháp B: Mở toàn bộ thư mục**
+**Phương pháp B: Mở Toàn Bộ Thư Mục**
 
-- Nhấp vào thanh menu `Tệp` → `Mở thư mục`
+- Nhấp vào thanh menu `Tệp` → `Mở Thư Mục`
 
 - Chọn thư mục chứa nhiều tệp `.assetbundle`
 
-#### 3️⃣ Duyệt danh sách tài nguyên
+#### 3️⃣ Duyệt Danh Sách Tài Nguyên
 
-- Nhấp vào nút `Thông tin` trên giao diện chính
+- Nhấp vào nút `Thông Tin` trên giao diện chính
 
 - Xem tất cả tài nguyên trong cửa sổ danh sách tài nguyên bật lên
 
 - Sắp xếp theo tên, loại, kích thước, v.v.
 
-#### 4️⃣ Thực hiện các thao tác
+#### 4️⃣ Thực Hiện Các Thao Tác
 
-**Xuất tài nguyên**
+**Xuất Tài Nguyên**
 
-1. Chọn tài nguyên cần chỉnh sửa trong danh sách
+1. Chọn tài nguyên cần xuất trong danh sách
 
 2. Nhấp vào nút xuất tương ứng ở bên phải
 
 3. Chọn vị trí lưu
 
-**Nhập tài nguyên**
+**Nhập Tài Nguyên**
 
-1. Chọn tài nguyên cần chỉnh sửa trong danh sách
+1. Chọn tài nguyên cần nhập trong danh sách
 
-2. Nhấp vào nút nhập tương ứng ở bên phải
+2. Nhấp vào nút nhập tương ứng nút bên phải
 
 3. Chọn tệp cần nhập
 
@@ -290,17 +275,17 @@ J --> I
 
 - Chọn tài nguyên trong danh sách
 
-- Bản xem trước sẽ tự động xuất hiện ở bảng điều khiển bên phải
+- Bản xem trước sẽ tự động xuất hiện ở bảng bên phải
 
-- Đối với mô hình 3D, bạn có thể sử dụng chuột để xoay và xem.
+- Đối với mô hình 3D, bạn có thể dùng chuột để xoay và xem.
 
 #### 5️⃣ Lưu thay đổi
 
-- Sau khi hoàn tất tất cả các thay đổi, nhấp vào nút `Lưu và Thoát`
+- Sau khi hoàn tất tất cả các thay đổi, hãy nhấp vào nút `Lưu và Thoát`.
 
-- Chọn thư mục đầu ra
+- Chọn thư mục đầu ra.
 
-- Chương trình sẽ tạo tệp AssetBundle đã chỉnh sửa.
+- Chương trình sẽ tạo tệp AssetBundle đã được sửa đổi.
 
 ### 🔑 Các loại tài nguyên được hỗ trợ
 
@@ -310,13 +295,13 @@ J --> I
 
 | **Texture2D** | Tài nguyên kết cấu 2D | ✅ Xuất / ✅ Nhập / ✅ Xem trước |
 
-| **Sprite** | Tài nguyên Sprite | ✅ Xuất / ✅ Xem trước |
+| **Sprite** | Tài nguyên Sprite | ✅ Xuất
 
-| **Mesh** | Mô hình lưới 3D | ✅ Xuất 
+| **Mesh** | Lưới mô hình 3D | ✅ Xuất / ✅ Xem trước |
 
 | **TextAsset** | Tài nguyên văn bản | ✅ Xuất / ✅ Nhập |
 
-| **AnimationClip** | Các đoạn hoạt hình | ✅ Xuất |
+| **AnimationClip** | Đoạn phim hoạt hình | ✅ Xuất |
 
 | **AudioClip** | Tài nguyên âm thanh | ✅ Xuất |
 
