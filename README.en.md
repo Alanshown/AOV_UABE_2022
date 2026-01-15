@@ -195,28 +195,28 @@
 
 ```mermaid
 graph LR
+
 A[Start program] --> B[Select file/directory]
 
-B --> C [View Resource List]
+B --> C[View resource list]
 
-C --> D [Select Resource]
+C --> D[Select resource]
 
-D --> E {Operation Type}
+D --> E{Operation type}
 
-E --> |Export| F [Select Save Location]
+E -->|Export| F[Select save location]
 
-E --> |Import| G [Select Replace File]
+E -->|Import| G[Select replacement file]
 
-E --> |Preview| H [View Resource]
+E -->|Preview| H[View resource]
 
-F --> I [Done]
+F --> I[Done]
 
-G --> J [Save and Exit]
+G --> J[Save and exit]
 
 H --> C
 
 J --> I
-
 ```
 
 ### Detailed Steps

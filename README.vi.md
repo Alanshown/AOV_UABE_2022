@@ -195,28 +195,28 @@
 
 ```mermaid
 đồ thị LR
+
 A[Khởi động chương trình] --> B[Chọn tệp/thư mục]
 
-B --> C [Xem danh sách tài nguyên]
+B --> C[Xem danh sách tài nguyên]
 
-C --> D [Chọn tài nguyên]
+C --> D[Chọn tài nguyên]
 
-D --> E {Loại thao tác}
+D --> E[Loại thao tác]
 
-E --> |Xuất| F [Chọn vị trí lưu]
+E -->|Xuất| F[Chọn vị trí lưu]
 
-E --> |Nhập| G [Chọn tệp thay thế]
+E -->|Nhập| G[Chọn tệp thay thế]
 
-E --> |Xem trước| H [Xem tài nguyên]
+E -->|Xem trước| H[Xem tài nguyên]
 
-F --> I [Hoàn tất]
+F --> I[Hoàn tất]
 
-G --> J [Lưu và thoát]
+G --> J[Lưu và thoát]
 
 H --> C
 
 J --> I
-
 ```
 
 ### Các bước chi tiết
