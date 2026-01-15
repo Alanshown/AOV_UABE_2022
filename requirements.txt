@@ -1,0 +1,15 @@
+lz4==4.3.2
+brotli==1.0.9
+Pillow==9.4.0
+texture2ddecoder==1.0.4
+etcpak==0.9.8
+astc-encoder-py >= 0.1.9
+pyfmodex >= 0.7.1
+fsspec==2023.4.0
+attrs==22.2.0
+sm4==1.0.2
+pycryptodome==3.21.0
+PyOpenGL==3.1.9
+PyOpenGL_accelerate==3.1.9
+pyopengltk==0.0.4
+tkinter==8.6

@@ -9,13 +9,13 @@
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
 [![Web Version](https://img.shields.io/badge/🌐_Web_Version-Online-brightgreen.svg)](http://ld.ymkeji.xyz/)
 
-**[繁体中文](README.md)** | [English](README.en.md) | [Tiếng Việt](README.vi.md)
+**[简体中文](README.md)** | [English](README.en.md) | [Tiếng Việt](README.vi.md)
 
-<img src="https://github.com/KennyYang0726/UABE_AOV/raw/refs/heads/main/icon.ico" width="128" alt="UABE AOV Logo"/>
+<img src="https://github.com/Alanshown/AOV_UABE_2022/icon.ico" width="128" alt="UABE AOV Logo"/>
 
 ### 🔧 专为《传说对决 / Arena of Valor》设计的 AssetBundle 编辑工具
 
-*适用于 1.58 版本之前的游戏资源文件*
+
 
 ---
 
@@ -36,7 +36,7 @@
 
 ---
 
-[📥 下载桌面版](https://github.com/KennyYang0726/UABE_AOV/releases) | 
+[📥 下载桌面版](https://github.com/KennyYang0726/UABE_AOV/releases) |
 
 </div>
 
@@ -61,7 +61,7 @@
 
 ## ✨ 项目简介
 
-**UABE for Arena of Valor** 是一款专为《传说对决》游戏资源文件设计的图形化编辑工具。本项目基于 [K0lb3](https://github.com/K0lb3) 的 **UnityPy** 框架，并整合了 **常暗踏影** 的魔改版本，添加了 AOV 专属的加解密流程支持。
+**UABE for Arena of Valor** 是一款专为《传说对决》游戏资源文件设计的图形化编辑工具。本项目基于 [K0lb3](https://github.com/K0lb3) 的 **UnityPy** 框架进行开发的魔改版本，添加了 AOV 专属的加解密流程支持。
 
 ### 🌟 主要特点
 
@@ -145,64 +145,64 @@
 
 ```mermaid
 graph LR
-    A[啟動程序] --> B[選擇文件/目錄]
-    B --> C[查看資源列表]
-    C --> D[選擇資源]
-    D --> E{操作類型}
-    E -->|導出| F[選擇保存位置]
-    E -->|導入| G[選擇替換文件]
-    E -->|預覽| H[查看資源]
-    F --> I[完成]
-    G --> J[保存並退出]
-    H --> C
-    J --> I
+A[启动程序] --> B[选择文件/目录]
+B --> C[查看资源列表]
+C --> D[选择资源]
+D --> E{操作类型}
+E -->|导出| F[选择保存位置]
+E -->|导入| G[选择替换文件]
+E -->|预览| H[查看资源]
+F --> I[完成]
+G --> J[保存并退出]
+H --> C
+J --> I
 ```
 
-### 詳細步驟
+### 详细步骤
 
-#### 1️⃣ 啟動程序
+#### 1️⃣ 安装依赖再启动程序
+- 项目路径下安装依赖 pip install -r requirements.txt
+- 执行 `python main.py`（主文件）
 
-- 執行 `python main.py`（主文件）
+#### 2️⃣ 打开资源文件
 
-#### 2️⃣ 打開資源文件
+**方式 A：打开单个文件**
+- 点击菜单栏 `文件` → `打开文件`
+- 选择 `.assetbundle` 文件
 
-**方式 A：打開單個文件**
-- 點擊菜單欄 `文件` → `打開文件`
-- 選擇 `.assetbundle` 文件
+**方式 B：打开整个目录**
+- 点击菜单栏 `文件` → `打开目录`
+- 选择包含多个 `.assetbundle` 文件的文件夹
 
-**方式 B：打開整個目錄**
-- 點擊菜單欄 `文件` → `打開目錄`
-- 選擇包含多個 `.assetbundle` 文件的文件夾
+#### 3️⃣ 浏览资源列表
 
-#### 3️⃣ 瀏覽資源列表
+- 点击主界面的 `Info` 按钮
+- 在弹出的资源列表窗口中查看所有资源
+- 可按名称、类型、大小等排序
 
-- 點擊主界面的 `Info` 按鈕
-- 在彈出的資源列表窗口中查看所有資源
-- 可按名稱、類型、大小等排序
+#### 4️⃣ 执行操作
 
-#### 4️⃣ 執行操作
+**导出资源**
+1. 在列表中选中目标资源
+2. 点击右侧对应的导出按钮
+3. 选择保存位置
 
-**導出資源**
-1. 在列表中選中目標資源
-2. 點擊右側對應的導出按鈕
-3. 選擇保存位置
+**导入资源**
+1. 在列表中选中目标资源
+2. 点击右侧对应的导入按钮
+3. 选择要导入的文件
+4. 确认替换
 
-**導入資源**
-1. 在列表中選中目標資源
-2. 點擊右側對應的導入按鈕
-3. 選擇要導入的文件
-4. 確認替換
-
-**預覽資源**
-- 在列表中選中資源
-- 右側面板自動顯示預覽
-- 對於 3D 模型，可使用鼠標旋轉查看
+**预览资源**
+- 在列表中选中资源
+- 右侧面板自动显示预览
+- 对于 3D 模型，可使用鼠标旋转查看
 
 #### 5️⃣ 保存修改
 
-- 完成所有修改後，點擊 `保存並退出` 按鈕
-- 選擇輸出目錄
-- 程序將生成修改後的 AssetBundle 文件
+- 完成所有修改后，点击 `保存并退出` 按钮
+- 选择输出目录
+- 程序将生成修改后的 AssetBundle 文件
 
 
 ### 🔑 支持的资源类型
@@ -210,7 +210,7 @@ graph LR
 | 资源类型 | 说明 | 操作支持 |
 |---------|------|---------|
 | **Texture2D** | 2D 贴图资源 | ✅ 导出 / ✅ 导入 / ✅ 预览 |
-| **Sprite** | 精灵图资源 | ✅ 导出 / ✅ 预览 |
+| **Sprite** | 精灵图资源 | ✅ 导出 
 | **Mesh** | 3D 模型网格 | ✅ 导出 / ✅ 预览 |
 | **TextAsset** | 文本资源 | ✅ 导出 / ✅ 导入 |
 | **AnimationClip** | 动画片段 | ✅ 导出 |
