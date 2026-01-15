@@ -6,7 +6,7 @@
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
 [![Web Version](https://img.shields.io/badge/🌐_Web_Version-Online-brightgreen.svg)](http://ld.ymkeji.xyz/)
 
-[繁體中文](README.md) | [English](README.en.md) | **Tiếng Việt**
+[简体中文](README.md) | [English](README.en.md) | **Tiếng Việt**
 
 <div align="center">
 
@@ -212,7 +212,7 @@ J --> I
 <div align="center">
   <div style="background: radial-gradient(circle at top, rgba(255,255,255,0.25), rgba(0,0,0,0.65)), linear-gradient(135deg, #1c1c1c, #121212); padding: 24px; border-radius: 24px; box-shadow: 0 0 40px rgba(0,0,0,0.75); max-width: 420px;">
     <div style="position: relative; display: inline-block;">
-      <img src="https://github.com/Alanshown/AOV_UABE_2022/blob/main/UI/QR_Code.jpg" alt="Mã QR hỗ trợ" style="width: 320px; border-radius: 16px; border: 4px solid rgba(255,255,255,0.2);">
+      <img src="https://github.com/Alanshown/AOV_UABE_2022/blob/main/UI/J.jpg" alt="Mã QR hỗ trợ" style="width: 320px; border-radius: 16px; border: 4px solid rgba(255,255,255,0.2);">
       <div style="position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,0.7); color: #fff; padding: 4px 10px; border-radius: 10px; font-weight: 600; font-size: 14px;">Mời tôi uống cà phê / Buy me coffee</div>
     </div>
     <p style="margin: 16px 0 0; color: #f0f0f0;">Nếu công cụ hữu ích, một ly cà phê là động lực để chúng tôi tiếp tục cập nhật!</p>
