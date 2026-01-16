@@ -11,7 +11,7 @@
 <div align="center">
 
 ### 🔧 Graphical AssetBundle editor tailored for Arena of Valor
-
+This GUI tool is a secondary development based on the UI framework of this original project: https://github.com/KennyYang0726/UABE_AOV?utm_source=chatgpt.com
 ---
 
 ## 🌐 Web-based experience
