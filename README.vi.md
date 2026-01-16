@@ -12,6 +12,7 @@
 
 ### 🔧 Trình chỉnh sửa AssetBundle đồ họa dành riêng cho Arena of Valor
 
+Công cụ giao diện người dùng (GUI) này là sản phẩm phát triển thứ cấp dựa trên khung giao diện người dùng của dự án gốc: https://github.com/KennyYang0726/UABE_AOV?utm_source=chatgpt.com
 ---
 
 ## 🌐 Trải nghiệm phiên bản web
