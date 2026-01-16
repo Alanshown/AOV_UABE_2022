@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
-[![Web Version](https://img.shields.io/badge/🌐_Web_Version-Online-brightgreen.svg)](http://ld.ymkeji.xyz/)
+[![Web Version](https://img.shields.io/badge/🌐_Web_Version-Online-brightgreen.svg)](ld.ymkeji.xyz)
 
 **[简体中文](README.md)** | [English](README.en.md) | [Tiếng Việt](README.vi.md)
 
