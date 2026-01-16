@@ -14,7 +14,7 @@
 <img src="https://github.com/Alanshown/AOV_UABE_2022/blob/main/icon.ico" width="128" alt="UABE AOV Logo"/>
 
 ### 🔧 专为《传说对决 / Arena of Valor》设计的 AssetBundle 编辑工具
-
+此GUI工具基于此原项目的ui框架基础进行的二次开发https://github.com/KennyYang0726/UABE_AOV?utm_source=chatgpt.com
 
 
 ---
