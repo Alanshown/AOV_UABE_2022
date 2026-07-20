@@ -17,26 +17,7 @@
 此GUI工具基于此原项目的ui框架基础进行的二次开发https://github.com/KennyYang0726/UABE_AOV?utm_source=chatgpt.com
 
 
----
-
-## 🌐 在线体验网页版
-
-**无需下载，立即体验！ ** 我们提供了功能完整的网页版 UABE 工具：
-
-### 🚀 [点击访问网页版 UABE](http://ld.ymkeji.xyz/)
-
-**网页版特点：**
-- ✨ 无需安装，浏览器直接使用
-- 🔒 数据本地处理，保护隐私安全
-- 📱 支持多平台（Windows / Mac / Linux）
-- 🎯 功能与桌面版完全一致
-- ⚡ 快速响应，操作流畅
-
-> 💡 **提示**：网页版适合快速体验和轻量级操作，如需批量处理大量文件，建议下载桌面版。
-
----
-
-[📥 下载桌面版](https://github.com/Alanshown/AOV_UABE_2022/releases/download/Latest/AOV_UABE_v2.0.0.zip) |
+[📥 下载桌面版](https://github.com/Alanshown/AOV_UABE_2022/releases) |
 
 </div>
 
@@ -153,7 +134,7 @@ J --> I
 #### 1️⃣ 安装依赖再启动程序
 - 项目路径下安装依赖 pip install -r requirements.txt
 - 执行 `python main.py`（主文件）
-- 或者直接下载[📥桌面版](https://github.com/Alanshown/AOV_UABE_2022/releases/download/Latest/AOV_UABE_v2.0.0.zip) |压缩包，解压后双击exe程序即可
+- 或者直接下载[💾桌面版](https://github.com/Alanshown/AOV_UABE_2022/releases) |压缩包，解压后双击exe程序即可
 
 #### 2️⃣ 打开资源文件
 
@@ -201,11 +182,10 @@ J --> I
 | 资源类型 | 说明 | 操作支持 |
 |---------|------|---------|
 | **Texture2D** | 2D 贴图资源 | ✅ 导出 / ✅ 导入 / ✅ 预览 |
-| **Sprite** | 精灵图资源 | ✅ 导出 
-| **Mesh** | 3D 模型网格 | ✅ 导出 / ✅ 预览 |
+| **Sprite** | 精灵图资源 | ✅ 导出 / ✅ 预览 |
+| **Mesh** | 3D 模型网格 | ✅ 导出  / ✅ 导入 / ✅ 预览 |
 | **TextAsset** | 文本资源 | ✅ 导出 / ✅ 导入 |
-| **AnimationClip** | 动画片段 | ✅ 导出 |
-| **AudioClip** | 音频资源 | ✅ 导出 |
+| **AnimationClip** | 动画片段 | ✅ 导出 /导入/✅ 预览|
 | **Material** | 材质资源 | ✅ 查看 |
 | **Shader** | 着色器 | ✅ 查看 |
 
