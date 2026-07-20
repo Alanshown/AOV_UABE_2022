@@ -13,26 +13,9 @@
 ### 🔧 Trình chỉnh sửa AssetBundle đồ họa dành riêng cho Arena of Valor
 
 Công cụ giao diện người dùng (GUI) này là sản phẩm phát triển thứ cấp dựa trên khung giao diện người dùng của dự án gốc: https://github.com/KennyYang0726/UABE_AOV?utm_source=chatgpt.com
----
 
-## 🌐 Trải nghiệm phiên bản web
 
-**Không cần tải xuống — mở ngay trong trình duyệt!** Phiên bản web của UABE đã đầy đủ tính năng như desktop:
-
-### 🚀 [Khởi chạy phiên bản web](http://ld.ymkeji.xyz/)
-
-**Điểm nổi bật của web:**
-- ✨ Hoạt động ngay trên trình duyệt, không cần cài đặt
-- 🔐 Mọi thao tác xử lý cục bộ, bảo vệ quyền riêng tư
-- 📱 Tương thích đa nền tảng (Windows/Mac/Linux)
-- 🎯 Tính năng song hành với bản desktop
-- ⚡ Đáp ứng nhanh, thao tác mượt mà
-
-> 💡 **Gợi ý**: Dùng web để thử nghiệm nhanh; với các tệp lớn hoặc xử lý hàng loạt, hãy sử dụng bản desktop.
-
----
-
-[📥 Tải bản desktop](https://github.com/Alanshown/AOV_UABE_2022/releases/download/Latest/AOV_UABE_v2.0.0.zip)
+[📥 Tải bản desktop](https://github.com/Alanshown/AOV_UABE_2022/releases)
 
 </div>
 
