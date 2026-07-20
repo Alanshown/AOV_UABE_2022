@@ -12,26 +12,9 @@
 
 ### 🔧 Graphical AssetBundle editor tailored for Arena of Valor
 This GUI tool is a secondary development based on the UI framework of this original project: https://github.com/KennyYang0726/UABE_AOV?utm_source=chatgpt.com
----
 
-## 🌐 Web-based experience
 
-**No download required. Try it directly from your browser!** We provide a fully featured web edition of UABE:
-
-### 🚀 [Launch the web version](http://ld.ymkeji.xyz/)
-
-**Web highlights:**
-- ✨ Run instantly in any browser, no install
-- 🔐 Keep all operations local for privacy
-- 📱 Cross-platform support (Windows/Mac/Linux)
-- 🎯 Feature parity with the desktop edition
-- ⚡ Fast, responsive interactions
-
-> 💡 **Tip**: Use the web edition for quick experiments. For heavy batch processing, prefer the desktop build.
-
----
-
-[📥 Download desktop release](https://github.com/Alanshown/AOV_UABE_2022/releases/download/Latest/AOV_UABE_v2.0.0.zip)
+[📥 Download desktop release](https://github.com/Alanshown/AOV_UABE_2022/releases)
 
 </div>
 
