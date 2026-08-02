@@ -32,9 +32,12 @@ class Sprite(NamedObject):
         if version >= (5, 3):  # 5.3 and up
             self.m_IsPolygon = reader.read_boolean()
             reader.align_stream()
-        self.m_IsinUse = reader.read_int()
+        # This field is absent from the modern Sprite layout. Reading it in a
+        # Unity 2022 object shifts every atlas/render-data field by four bytes.
+        if version < (2017,):
+            self.m_IsinUse = reader.read_int()
         if version >= (2017,):  # 2017 and up
-            first = reader.read_bytes(16)  # GUID
+            first = bytes(reader.read_bytes(16))  # GUID keys must be hashable
             second = reader.read_long()
             self.m_RenderDataKey = (first, second)
             self.m_AtlasTags = reader.read_string_array()
@@ -55,7 +58,7 @@ class Sprite(NamedObject):
                 2020,
                 3,
             ):
-                self.m_Bones = [SpriteBone() for _ in range(m_BonesSize)]
+                self.m_Bones = [SpriteBone(reader) for _ in range(m_BonesSize)]
             else:
                 self.m_Bones = [reader.read_vector2_array() for _ in range(m_BonesSize)]
 
@@ -80,7 +83,8 @@ class Sprite(NamedObject):
         if version >= (5, 3):  # 5.3 and up
             writer.write_boolean(self.m_IsPolygon)
             writer.align_stream()
-        writer.write_int(self.m_IsinUse)
+        if version < (2017,):
+            writer.write_int(self.m_IsinUse)
         if version >= (2017,):  # 2017 and up
             writer.write_bytes(self.m_RenderDataKey[0])  # GUID
             writer.write_long(self.m_RenderDataKey[1])

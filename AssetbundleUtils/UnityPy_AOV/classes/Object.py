@@ -92,7 +92,7 @@ class Object(object):
     def _save(self, writer):
         # the reader is actually an ObjectReader,
         # the data value is written back into the asset
-        self.reader.data = writer.bytes
+        self.reader.set_raw_data(writer.bytes)
 
     def __getattr__(self, name):
         """

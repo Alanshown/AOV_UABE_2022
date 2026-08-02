@@ -159,7 +159,8 @@ def read_typetree(
 
     obj = read_value(nodes, reader, c_uint32(0))
 
-    read = reader.Position - reader.byte_start
+    start = 0 if getattr(reader, "_in_object_reader", False) else reader.byte_start
+    read = reader.Position - start
     if read != reader.byte_size:
         raise TypeTreeError(
             f"Error while read type, read {read} bytes but expected {reader.byte_size} bytes",
@@ -266,7 +267,8 @@ def read_typetree_str(
         read_value_str(sb, nodes, reader, i)
         i.value += 1
 
-    readed = reader.Position - reader.byte_start
+    start = 0 if getattr(reader, "_in_object_reader", False) else reader.byte_start
+    readed = reader.Position - start
     if readed != reader.byte_size:
         raise TypeTreeError(
             f"Error while read type, read {readed} bytes but expected {reader.byte_size} bytes",

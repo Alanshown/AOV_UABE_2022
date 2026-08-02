@@ -4,9 +4,119 @@ from PIL import Image
 from copy import copy
 from io import BytesIO
 import struct
+from threading import Lock
 from ..enums import TextureFormat, BuildTarget
 
 TF = TextureFormat
+
+try:
+    import astc_encoder
+except ImportError:  # pragma: no cover - covered by the explicit error below
+    astc_encoder = None
+
+
+_ASTC_CONTEXTS = {}
+
+
+def _compressed_block_size(texture_format: TF):
+    """Return the encoder block dimensions for a GPU-compressed format."""
+
+    name = texture_format.name
+    if name.startswith("ASTC"):
+        width, height = name.rsplit("_", 1)[1].split("x")
+        return int(width), int(height)
+    if name.startswith(("DXT", "BC", "ETC", "EAC")):
+        return 4, 4
+    if name.startswith("PVRTC"):
+        return (8 if name.endswith("2") else 4), 4
+    return None
+
+
+def _pad_image_to_compression_blocks(
+    image: Image.Image, texture_format: TF
+) -> Image.Image:
+    """Edge-pad the encoder canvas while retaining Unity's logical size."""
+
+    block_size = _compressed_block_size(texture_format)
+    if block_size is None:
+        return image
+    block_width, block_height = block_size
+    padded_width = (
+        (max(1, image.width) + block_width - 1) // block_width
+    ) * block_width
+    padded_height = (
+        (max(1, image.height) + block_height - 1) // block_height
+    ) * block_height
+    if (padded_width, padded_height) == image.size:
+        return image
+
+    padded = Image.new(image.mode, (padded_width, padded_height))
+    padded.paste(image, (0, 0))
+    nearest = getattr(Image, "Resampling", Image).NEAREST
+    if padded_width != image.width:
+        right = image.crop(
+            (image.width - 1, 0, image.width, image.height)
+        ).resize((padded_width - image.width, image.height), nearest)
+        padded.paste(right, (image.width, 0))
+    if padded_height != image.height:
+        bottom = image.crop(
+            (0, image.height - 1, image.width, image.height)
+        ).resize((image.width, padded_height - image.height), nearest)
+        padded.paste(bottom, (0, image.height))
+    if padded_width != image.width and padded_height != image.height:
+        corner = image.getpixel((image.width - 1, image.height - 1))
+        padded.paste(
+            Image.new(
+                image.mode,
+                (
+                    padded_width - image.width,
+                    padded_height - image.height,
+                ),
+                corner,
+            ),
+            (image.width, image.height),
+        )
+    return padded
+
+
+def _astc_context(block_size):
+    if astc_encoder is None:
+        raise RuntimeError(
+            "ASTC texture import requires the astc-encoder-py package"
+        )
+    if block_size not in _ASTC_CONTEXTS:
+        config = astc_encoder.ASTCConfig(
+            astc_encoder.ASTCProfile.LDR,
+            *block_size,
+            block_z=1,
+            quality=100,
+            flags=astc_encoder.ASTCConfigFlags.USE_DECODE_UNORM8,
+        )
+        _ASTC_CONTEXTS[block_size] = (
+            astc_encoder.ASTCContext(config),
+            Lock(),
+        )
+    return _ASTC_CONTEXTS[block_size]
+
+
+def _compress_astc(image: Image.Image, texture_format: TF) -> bytes:
+    block_size = _compressed_block_size(texture_format)
+    if block_size is None:
+        raise ValueError(
+            f"Unable to determine ASTC block size for {texture_format.name}"
+        )
+    rgba = image.convert("RGBA")
+    astc_image = astc_encoder.ASTCImage(
+        astc_encoder.ASTCType.U8,
+        rgba.width,
+        rgba.height,
+        1,
+        rgba.tobytes(),
+    )
+    swizzle = astc_encoder.ASTCSwizzle.from_str("RGBA")
+    context, lock = _astc_context(block_size)
+    with lock:
+        return context.compress(astc_image, swizzle)
 
 
 def image_to_texture2d(img: Image.Image, target_texture_format: TF, flip: bool = True):
@@ -15,31 +125,52 @@ def image_to_texture2d(img: Image.Image, target_texture_format: TF, flip: bool =
 
     # DXT
     if target_texture_format in [TF.DXT1, TF.DXT1Crunched]:
+        img = _pad_image_to_compression_blocks(
+            img.convert("RGBA"), target_texture_format
+        )
         raw_img = img.convert("RGBA").tobytes()
         enc_img = etcpak.compress_to_dxt1(raw_img, img.width, img.height)
         tex_format = TF.DXT1
     elif target_texture_format in [TF.DXT5, TF.DXT5Crunched]:
+        img = _pad_image_to_compression_blocks(
+            img.convert("RGBA"), target_texture_format
+        )
         raw_img = img.convert("RGBA").tobytes()
         enc_img = etcpak.compress_to_dxt5(raw_img, img.width, img.height)
         tex_format = TF.DXT5
+    # ASTC
+    elif target_texture_format.name.startswith("ASTC"):
+        img = _pad_image_to_compression_blocks(
+            img.convert("RGBA"), target_texture_format
+        )
+        enc_img = _compress_astc(img, target_texture_format)
+        tex_format = target_texture_format
     # ETC
     elif target_texture_format in [TF.ETC_RGB4, TF.ETC_RGB4Crunched, TF.ETC_RGB4_3DS]:
         img = assert_rgba(img, target_texture_format)
+        img = _pad_image_to_compression_blocks(
+            img, target_texture_format
+        )
         r, g, b, a = img.split()
         raw_img = Image.merge("RGBA", (b, g, r, a)).tobytes()
         enc_img = etcpak.compress_to_etc1(raw_img, img.width, img.height)
         tex_format = TF.ETC_RGB4
     elif target_texture_format == TF.ETC2_RGB:
         img = assert_rgba(img, target_texture_format)
+        img = _pad_image_to_compression_blocks(
+            img, target_texture_format
+        )
         r, g, b, a = img.split()
         raw_img = Image.merge("RGBA", (b, g, r, a)).tobytes()
         enc_img = etcpak.compress_to_etc2_rgb(raw_img, img.width, img.height)
         tex_format = TF.ETC2_RGB
     elif (
         target_texture_format in [TF.ETC2_RGBA8, TF.ETC2_RGBA8Crunched, TF.ETC2_RGBA1]
-        or "_RGB_" in target_texture_format.name
     ):
         img = assert_rgba(img, target_texture_format)
+        img = _pad_image_to_compression_blocks(
+            img, target_texture_format
+        )
         r, g, b, a = img.split()
         raw_img = Image.merge("RGBA", (b, g, r, a)).tobytes()
         enc_img = etcpak.compress_to_etc2_rgba(raw_img, img.width, img.height)
@@ -48,6 +179,21 @@ def image_to_texture2d(img: Image.Image, target_texture_format: TF, flip: bool =
     elif target_texture_format == TF.Alpha8:
         enc_img = img.tobytes("raw", "A")
         tex_format = TF.Alpha8
+    elif target_texture_format == TF.ARGB32:
+        red, green, blue, alpha = img.convert("RGBA").split()
+        enc_img = Image.merge(
+            "RGBA", (alpha, red, green, blue)
+        ).tobytes()
+        tex_format = TF.ARGB32
+    elif target_texture_format == TF.BGRA32:
+        red, green, blue, alpha = img.convert("RGBA").split()
+        enc_img = Image.merge(
+            "RGBA", (blue, green, red, alpha)
+        ).tobytes()
+        tex_format = TF.BGRA32
+    elif target_texture_format == TF.RGBA32:
+        enc_img = img.convert("RGBA").tobytes("raw", "RGBA")
+        tex_format = TF.RGBA32
     # R - should probably be moerged into #A, as pure R is used as Alpha
     # but need test data for this first
     elif target_texture_format in [

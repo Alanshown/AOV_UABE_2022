@@ -26,7 +26,10 @@ class ObjectReader:
     def __init__(self, assets_file, reader: EndianBinaryReader):
         self.assets_file = assets_file
         self.reader = reader
-        self.data = b""
+        # None means "unmodified". Empty bytes is a valid replacement payload.
+        self.data = None
+        self._in_object_reader = False
+        self._object_read_depth = 0
         self.version = assets_file.version
         self.version2 = assets_file.header.version
         self.platform = assets_file.target_platform
@@ -96,7 +99,7 @@ class ObjectReader:
             writer.align_stream()
             writer.write_long(self.path_id)
 
-        if self.data:
+        if self.data is not None:
             data = self.data
             # in some cases the parser doesn't read all of the object data
             # games might still require the missing data
@@ -134,8 +137,10 @@ class ObjectReader:
             writer.write_byte(self.stripped)
 
     def set_raw_data(self, data):
-        self.data = data
-        self.assets_file.mark_changed()
+        self.data = bytes(data)
+        self.byte_size = len(self.data)
+        if self.assets_file:
+            self.assets_file.mark_changed()
 
     @property
     def container(self):
@@ -154,27 +159,117 @@ class ObjectReader:
         self.reader.Position = pos
 
     def reset(self):
-        self.reader.Position = self.byte_start
+        self.reader.Position = 0 if self._in_object_reader else self.byte_start
+
+    def _begin_object_read(self):
+        """Use a bounded zero-copy reader for one serialized object.
+
+        Object parsers used to share the complete assets-file reader.  A stale
+        cursor or a parser/layout mismatch could therefore read into following
+        objects (and, for bogus array sizes, allocate enormous amounts of
+        memory).  A memoryview slice keeps this fast while enforcing the
+        object's declared byte boundary.
+        """
+        source = self.reader
+        if self._object_read_depth:
+            # MonoBehaviour's class parser asks for its complete typetree while
+            # the outer bounded object reader is still active.  Clone that
+            # already-bounded view instead of applying the absolute
+            # ``byte_start`` a second time.  The previous implementation
+            # interpreted the 4.6 MB file offset inside a 1 KB object view and
+            # consequently rejected valid Unity 2022 MonoBehaviours.
+            local = EndianBinaryReader(
+                source.bytes,
+                endian=source.endian,
+                offset=source.BaseOffset,
+            )
+            self.reader = local
+            self._object_read_depth += 1
+            self._in_object_reader = True
+            return source, local
+        if self.data is not None:
+            local = EndianBinaryReader(
+                self.data,
+                endian=source.endian,
+                offset=source.BaseOffset + self.byte_start,
+            )
+            self.reader = local
+            self._object_read_depth += 1
+            self._in_object_reader = True
+            return source, local
+        end = self.byte_start + self.byte_size
+        if self.byte_start < 0 or self.byte_size < 0 or end > source.Length:
+            raise ValueError(
+                f"Object {self.path_id} range [{self.byte_start}, {end}) "
+                f"is outside the {source.Length}-byte assets file"
+            )
+        source.Position = self.byte_start
+        data = source.read_bytes(self.byte_size)
+        if len(data) != self.byte_size:
+            raise EOFError(
+                f"Object {self.path_id} is truncated: expected "
+                f"{self.byte_size} bytes, got {len(data)}"
+            )
+        local = EndianBinaryReader(
+            data,
+            endian=source.endian,
+            offset=source.BaseOffset + self.byte_start,
+        )
+        self.reader = local
+        self._object_read_depth += 1
+        self._in_object_reader = True
+        return source, local
+
+    def _end_object_read(self, source, local):
+        self._read_until = self.byte_start + local.Position
+        self.reader = source
+        self._object_read_depth = max(0, self._object_read_depth - 1)
+        self._in_object_reader = self._object_read_depth > 0
+
+    def peek_name(self, default=None):
+        """Read the leading ``m_Name`` without parsing the whole object."""
+        named_types = {
+            "AnimationClip", "AnimatorController", "AssetBundle", "AudioClip",
+            "Avatar", "Font", "Material", "Mesh", "MonoScript",
+            "RuntimeAnimatorController", "Shader", "Sprite", "SpriteAtlas",
+            "TextAsset", "Texture2D", "VideoClip",
+        }
+        if self.type.name not in named_types:
+            return default
+        source, local = self._begin_object_read()
+        try:
+            name = local.read_aligned_string()
+            return name or default
+        except (EOFError, ValueError, UnicodeError):
+            return default
+        finally:
+            self._end_object_read(source, local)
 
     def read(self, return_typetree_on_error: bool=True):
         cls = getattr(classes, self.type.name, None)
 
         obj = None
-        if cls:
-            try:
+        parse_error = None
+        source, local = self._begin_object_read()
+        try:
+            if cls:
                 obj = cls(self)
-            except Exception as e:
-                if return_typetree_on_error:
-                    print(f"Error during the parsing of object {self.path_id}")
-                    print(e)
-                    print("Returning the typetree")
-                else:
-                    raise e
+        except Exception as e:
+            parse_error = e
+        finally:
+            self._end_object_read(source, local)
+
+        if parse_error is not None:
+            if return_typetree_on_error:
+                print(f"Error during the parsing of object {self.path_id}")
+                print(parse_error)
+                print("Returning the typetree")
+            else:
+                raise parse_error
         if not obj:
             typetree = self.read_typetree()
             if typetree:
                 obj = NodeHelper(typetree, self.assets_file)
-        self._read_until = self.reader.Position
         return obj
 
     def get(self, key, default=None):
@@ -194,11 +289,14 @@ class ObjectReader:
     ###################################################
 
     def dump_typetree(self, nodes: list = None) -> str:
-        self.reset()
-        sb = []
-        nodes = self.get_typetree(nodes)
-        TypeTreeHelper.read_typetree_str(sb, nodes, self)
-        return "".join(sb)
+        source, local = self._begin_object_read()
+        try:
+            sb = []
+            nodes = self.get_typetree_nodes(nodes)
+            TypeTreeHelper.read_typetree_str(sb, nodes, self)
+            return "".join(sb)
+        finally:
+            self._end_object_read(source, local)
 
     def dump_typetree_structure(self) -> str:
         return TypeTreeHelper.dump_typetree(self.get_typetree_nodes())
@@ -216,9 +314,12 @@ class ObjectReader:
         return nodes
 
     def read_typetree(self, nodes: list = None) -> dict:
-        self.reset()
-        nodes = self.get_typetree_nodes(nodes)
-        return TypeTreeHelper.read_typetree(nodes, self)
+        source, local = self._begin_object_read()
+        try:
+            nodes = self.get_typetree_nodes(nodes)
+            return TypeTreeHelper.read_typetree(nodes, self)
+        finally:
+            self._end_object_read(source, local)
 
     def save_typetree(
         self, tree: dict, nodes: list = None, writer: EndianBinaryWriter = None
@@ -232,6 +333,8 @@ class ObjectReader:
         return data
 
     def get_raw_data(self) -> bytes:
+        if self.data is not None:
+            return self.data
         pos = self.Position
         self.reset()
         ret = self.reader.read_bytes(self.byte_size)
@@ -239,6 +342,7 @@ class ObjectReader:
         return ret
 
     def set_raw_data(self, data):
-        self.data = data
+        self.data = bytes(data)
+        self.byte_size = len(self.data)
         if self.assets_file:
             self.assets_file.mark_changed()

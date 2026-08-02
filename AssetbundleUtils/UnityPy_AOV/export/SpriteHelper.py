@@ -66,16 +66,16 @@ def get_image_from_sprite(m_Sprite) -> Image.Image:
     if settings_raw.packed == 1:
         rotation = settings_raw.packingRotation
         if rotation == SpritePackingRotation.kSPRFlipHorizontal:
-            sprite_image = sprite_image.transpose(Image.FLIP_TOP_BOTTOM)
+            sprite_image = sprite_image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
         # spriteImage = RotateFlip(RotateFlipType.RotateNoneFlipX)
         elif rotation == SpritePackingRotation.kSPRFlipVertical:
-            sprite_image = sprite_image.transpose(Image.FLIP_LEFT_RIGHT)
+            sprite_image = sprite_image.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
         # spriteImage.RotateFlip(RotateFlipType.RotateNoneFlipY)
         elif rotation == SpritePackingRotation.kSPRRotate180:
-            sprite_image = sprite_image.transpose(Image.ROTATE_180)
+            sprite_image = sprite_image.transpose(Image.Transpose.ROTATE_180)
         # spriteImage.RotateFlip(RotateFlipType.Rotate180FlipNone)
         elif rotation == SpritePackingRotation.kSPRRotate90:
-            sprite_image = sprite_image.transpose(Image.ROTATE_270)
+            sprite_image = sprite_image.transpose(Image.Transpose.ROTATE_270)
     # spriteImage.RotateFlip(RotateFlipType.Rotate270FlipNone)
 
     if settings_raw.packingMode == SpritePackingMode.kSPMTight:
@@ -97,7 +97,7 @@ def get_image_from_sprite(m_Sprite) -> Image.Image:
             # add mask as alpha-channel to keep the polygon clean
             sprite_image.putalpha(mask)
 
-    return sprite_image.transpose(Image.FLIP_TOP_BOTTOM)
+    return sprite_image.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
 
 
 def get_triangles(m_Sprite):

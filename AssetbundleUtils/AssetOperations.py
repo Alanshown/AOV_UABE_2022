@@ -1,7 +1,7 @@
 import os
 from tkinter import filedialog, messagebox
 from PIL import Image
-from .UnityPy_AOV.enums import TextureFormat
+from .TextureImport import replace_texture_image
 """
 這是所有 匯出/匯入 功能集
 """
@@ -120,8 +120,7 @@ def import_texture(lang, tree):
                         if not hasattr(data, 'image') or not hasattr(data, 'save'):
                             show_dialog(lang["Dialog_Title"], "This asset does not support texture import")
                             return
-                        data.m_TextureFormat = TextureFormat.RGBA32 # Fix photo quality loss
-                        data.image = pil_img
+                        replace_texture_image(data, pil_img)
                         data.save()
                         modified_assets[str(pathID)] = "*"  # Mark as modified
                         refresh_modified_status(tree)

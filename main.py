@@ -1,244 +1,483 @@
 # -*- coding: utf-8 -*-
-"""
-AssetBundle Tool - 现代化主界面
-"""
+"""AOV Asset Workshop — OpenAI Aurora desktop shell."""
+
+from __future__ import annotations
+
+import multiprocessing
+import os
+import shutil
+import sys
 import tkinter as tk
-from tkinter import Menu, filedialog, messagebox
-from Config import Config
-from About import About
-from UI.CenterWindows import center_window
-from UI.ModernTheme import COLORS, FONTS, apply_button_hover, apply_all_styles
+import traceback
+
+from tkinterdnd2 import COPY, DND_FILES, REFUSE_DROP, TkinterDnD
+
+from UI.FilePicker import askdirectory, askopenfile
+from UI.I18n import (
+    LANGUAGE_LABELS, LANGUAGES, get_language, set_language, subscribe, tr,
+    unsubscribe,
+)
+from UI.ModernTheme import (
+    AuroraBackdrop, COLORS, FONTS, RoundedButton, SegmentedControl,
+    apply_all_styles, center_window, rounded_rectangle, set_rounded_window,
+    show_dialog,
+)
 from AssetbundleUtils.AssetsList import list_assets_window
-import os, shutil, sys
-
-def get_resource_path(filename):
-    """获取资源文件路径，兼容PyInstaller打包"""
-    if hasattr(sys, '_MEIPASS'):
-        return os.path.join(sys._MEIPASS, filename)
-    return os.path.abspath(filename)
-
-Selected_Dir = None  # Save Selected Directory
-Selected_File = None  # 選擇的檔案
-
-PickDir_Title = ""  # DirectoryPicker 標題
-PickFile_Title = ""  # FilePicker 標題
-
-SaveFile_Title = ""  # 存檔 標題
 
 
-# 即時更新語言設定
-def reload_config():
-    global PickFile_Title, PickDir_Title, SaveFile_Title
-    lang, lang_code = Config.reload_config()
-
-    root.title(lang["title"])
-    menu.entryconfig(1, label=lang["file"])
-    menu.entryconfig(2, label=lang["help"])
-    menu.entryconfig(3, label=lang["lang"])
-
-    subMenu.entryconfig(0, label=lang["open_file"])
-    subMenu.entryconfig(1, label=lang["open_dir"])
-    subMenu.entryconfig(2, label=lang["save"])
-    subMenu.entryconfig(3, label=lang["exit"])
-
-    helpMenu.entryconfig(0, label=lang["about"])
-
-    langMenu.entryconfig(0, label=lang["zh_tw"])
-    langMenu.entryconfig(1, label=lang["zh_cn"])
-    langMenu.entryconfig(2, label=lang["english"])
-    langMenu.entryconfig(3, label=lang["Vietnamese"])
-
-    # 更新主視窗中的文字，**如果沒有選擇檔案，才會顯示 lang["No_File"]**
-    if Selected_File is None:
-        set_file_text(lang["No_File"])
-    Info_BTN.config(text=lang["Info"])
-
-    # FilePicker 標題
-    PickFile_Title = lang["Pick_File"]
-    PickDir_Title = lang["Pick_Dir"]
-    # SaveFile 標題
-    SaveFile_Title = lang["Save_File"]
+APP_VERSION = "2.3.6"
 
 
-# 變更語言後，立即更新 UI
-def setting_languages(new_lang_code):
-    Config.setting_languages(new_lang_code)  # 更新語言設定
-    reload_config()  # 重新加載並更新 UI
+def get_resource_path(filename: str) -> str:
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, filename)
 
 
-# 打開檔案選擇器並設置檔案類型為 .assetbundle
-def open_file():
-    global Selected_File, Selected_Dir
-    Selected_Dir = None
-    file_path = filedialog.askopenfilename(
-        title=PickFile_Title, filetypes=[("AssetBundle files", "*.assetbundle")]
+def _startup_log_path() -> str:
+    base = os.environ.get("LOCALAPPDATA")
+    if not base:
+        base = os.path.join(os.path.expanduser("~"), "AppData", "Local")
+    folder = os.path.join(base, "AOV_UABE_2022")
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, "startup_error.log")
+
+
+def _report_startup_error(error: BaseException) -> None:
+    """Make windowed-build startup failures diagnosable instead of silently exiting."""
+
+    log_path = _startup_log_path()
+    details = "".join(
+        traceback.format_exception(type(error), error, error.__traceback__)
     )
-    if file_path:
-        Selected_File = file_path
-        file = os.path.basename(file_path)  # 只取檔名+副檔名
-        set_file_text(file)  # 更新標籤顯示檔案名稱
-
-
-# select folder
-def open_dir():
-    global Selected_Dir, Selected_File
-    Selected_File = None
-    file_path = filedialog.askdirectory(title=PickDir_Title)
-    if file_path:
-        Selected_Dir = file_path
-        file = os.path.basename(file_path)  # 只取檔名+副檔名
-        set_file_text(file)  # 更新標籤顯示檔案名稱
-
-
-# 設定 Label 文字
-def set_file_text(file_name):
-    label_file.config(state="normal")  # 解除不可編輯狀態
-    label_file.delete("1.0", tk.END)  # 清除舊內容
-    label_file.insert("1.0", file_name)  # 插入新內容
-    label_file.config(state="disabled")  # 設回不可編輯狀態
-
-
-# 開啟 Assets List
-def Get_Assests():
-    if Selected_File:
-        list_assets_window(Selected_File, IsInputDir=False)
-    elif Selected_Dir:
-        list_assets_window(Selected_Dir, IsInputDir=True)
-    else:
-        root.bell()
-
-
-def show_dialog(title, message):
-    """顯示一個簡單的對話框"""
-    messagebox.showinfo(title, message)
-
-
-# 保存功能说明：
-# 保存功能已移至 AssetsList.py 的 save_and_exit() 函数中
-# 用户在资产列表窗口中点击"保存并退出"按钮时，会直接选择输出目录并保存
-# 此处保留菜单项用于提示用户
-def save_assetbundle(lang):
-    show_dialog(lang.get("Dialog_Title", "Info"), 
-                lang.get("Dialog_Message_Save_Hint", "请先打开AssetBundle文件，在资产列表窗口中进行修改后点击\"保存并退出\"按钮保存。"))
-
-
-def on_close():
-    root.quit()  # 關閉 Tk() 主視窗
     try:
-        shutil.rmtree("./AssetbundleUtils/tmp")
-    except:
-        print
+        with open(log_path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(f"AOV UABE 2022 v{APP_VERSION}\n\n")
+            handle.write(details)
+    except OSError:
+        pass
+    try:
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(
+            None,
+            "程序启动失败，错误日志已保存到：\n"
+            f"{log_path}\n\n{type(error).__name__}: {error}",
+            "AOV UABE 2022",
+            0x10,
+        )
+    except Exception:
+        pass
 
 
-# 初始化 GUI
-root = tk.Tk()
-lang, lang_code = Config.reload_config()
+class Launcher:
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.selected_path: str | None = None
+        self.is_directory = False
+        self.path_mode = "file"
+        self.lang_code = get_language()
+        self.language_listener = subscribe(self.apply_language)
+        self.vars: dict[str, tk.StringVar] = {}
 
-# 应用现代化样式
-apply_all_styles()
+        root.title(tr("app_title"))
+        root.minsize(920, 580)
+        root.configure(bg=COLORS["canvas"])
+        center_window(root, 1060, 680)
+        set_rounded_window(root)
+        try:
+            root.iconbitmap(get_resource_path("icon.ico"))
+        except Exception:
+            pass
+        root.protocol("WM_DELETE_WINDOW", self.close)
+        apply_all_styles()
 
-root.title(lang["title"])
-root.geometry("420x100")
-root.configure(bg=COLORS["bg_light"])
+        self.backdrop = AuroraBackdrop(root, calm=True)
+        self.backdrop.pack(fill="both", expand=True)
+        self.shell = tk.Frame(self.backdrop, bg=COLORS["surface"])
+        self.shell_id = self.backdrop.create_window(34, 30, anchor="nw", window=self.shell)
+        self.backdrop.bind("<Configure>", self._resize_shell, add="+")
+        self._build_shell()
+        self._build_drop_overlay()
+        self.apply_language(self.lang_code)
+        self._register_drop_targets()
 
-# 禁止最小化和放大
-root.resizable(False, False)
-try:
-    root.iconbitmap(get_resource_path("icon.ico"))
-except:
-    pass  # 图标加载失败时忽略
+    def _var(self, key: str) -> tk.StringVar:
+        value = tk.StringVar(value=tr(key))
+        self.vars[key] = value
+        return value
 
-# 现代化菜单
-menu = Menu(root, bg=COLORS["bg_white"], fg=COLORS["text_primary"], 
-            activebackground=COLORS["primary"], activeforeground=COLORS["text_white"],
-            font=FONTS["body"])
-root.config(menu=menu)
+    def _resize_shell(self, event):
+        self.backdrop.itemconfigure(
+            self.shell_id,
+            width=max(760, event.width - 68),
+            height=max(500, event.height - 60),
+        )
 
-# 文件菜单
-subMenu = Menu(menu, tearoff=0, bg=COLORS["bg_white"], fg=COLORS["text_primary"],
-               activebackground=COLORS["primary_light"], activeforeground=COLORS["text_primary"],
-               font=FONTS["body"])
-menu.add_cascade(label=lang["file"], menu=subMenu)
-subMenu.add_command(label=lang["open_file"], command=open_file)
-subMenu.add_command(label=lang["open_dir"], command=open_dir)
-subMenu.add_separator()
-subMenu.add_command(label=lang["save"], command=lambda: save_assetbundle(lang))
-subMenu.add_separator()
-subMenu.add_command(label=lang["exit"], command=on_close)
+    def _build_shell(self):
+        top = tk.Frame(self.shell, bg=COLORS["surface"], padx=34, pady=19)
+        top.pack(fill="x")
+        brand = tk.Frame(top, bg=COLORS["surface"])
+        brand.pack(side="left")
+        logo = tk.Canvas(brand, width=44, height=44, bg=COLORS["surface"], highlightthickness=0)
+        logo.pack(side="left", padx=(0, 12))
+        rounded_rectangle(logo, 1, 1, 43, 43, 13, fill=COLORS["ink"], outline=COLORS["ink"])
+        logo.create_text(22, 22, text="A", fill="#A6E2E7", font=("Segoe UI", 18, "bold"))
+        title_box = tk.Frame(brand, bg=COLORS["surface"])
+        title_box.pack(side="left")
+        tk.Label(
+            title_box, text="AOV Asset Workshop", bg=COLORS["surface"],
+            fg=COLORS["text_primary"], font=FONTS["heading"], anchor="w"
+        ).pack(anchor="w")
+        tk.Label(
+            title_box, textvariable=self._var("brand_subtitle"),
+            bg=COLORS["surface"], fg=COLORS["text_muted"],
+            font=FONTS["tiny"], anchor="w"
+        ).pack(anchor="w", pady=(2, 0))
 
-# 帮助菜单
-helpMenu = Menu(menu, tearoff=0, bg=COLORS["bg_white"], fg=COLORS["text_primary"],
-                activebackground=COLORS["primary_light"], activeforeground=COLORS["text_primary"],
-                font=FONTS["body"])
-menu.add_cascade(label=lang["help"], menu=helpMenu)
-helpMenu.add_command(label=lang["about"], command=lambda: About.About())
+        self.language_control = SegmentedControl(
+            top,
+            [(code, LANGUAGE_LABELS[code]) for code in LANGUAGES],
+            self.lang_code,
+            self.change_language,
+            width=306,
+            height=38,
+            bg=COLORS["surface"],
+        )
+        self.language_control.pack(side="right")
+        self.about_button = RoundedButton(top, tr("about"), self.about, 84, 38, "secondary")
+        self.about_button.pack(side="right", padx=(0, 10))
 
-# 语言菜单
-langMenu = Menu(menu, tearoff=0, bg=COLORS["bg_white"], fg=COLORS["text_primary"],
-                activebackground=COLORS["primary_light"], activeforeground=COLORS["text_primary"],
-                font=FONTS["body"])
-menu.add_cascade(label=lang["lang"], menu=langMenu)
-langMenu.add_command(label=lang["zh_tw"], command=lambda: setting_languages("zh-tw"))
-langMenu.add_command(label=lang["zh_cn"], command=lambda: setting_languages("zh-cn"))
-langMenu.add_command(label=lang["english"], command=lambda: setting_languages("en"))
-langMenu.add_command(label=lang["Vietnamese"], command=lambda: setting_languages("vn"))
+        tk.Frame(self.shell, height=1, bg=COLORS["border_light"]).pack(fill="x")
+        content = tk.Frame(self.shell, bg=COLORS["surface"], padx=44, pady=26)
+        content.pack(fill="both", expand=True)
+        tk.Label(
+            content, textvariable=self._var("hero"), bg=COLORS["surface"],
+            fg=COLORS["text_primary"], font=FONTS["hero"],
+            justify="left", anchor="w"
+        ).pack(fill="x")
+        tk.Label(
+            content, textvariable=self._var("hero_subtitle"),
+            bg=COLORS["surface"], fg=COLORS["text_secondary"],
+            font=FONTS["body"], justify="left", anchor="w", wraplength=860
+        ).pack(fill="x", pady=(10, 22))
 
-PickFile_Title = lang["Pick_File"]
-PickDir_Title = lang["Pick_Dir"]
-SaveFile_Title = lang["Save_File"]
+        picker = tk.Frame(content, bg=COLORS["surface_alt"], padx=22, pady=18)
+        picker.pack(fill="x")
+        picker_top = tk.Frame(picker, bg=COLORS["surface_alt"])
+        picker_top.pack(fill="x")
+        self.kind_var = tk.StringVar(value=tr("no_project"))
+        tk.Label(
+            picker_top, textvariable=self.kind_var, bg=COLORS["surface_alt"],
+            fg=COLORS["primary"], font=FONTS["small"], anchor="w"
+        ).pack(side="left")
+        self.path_mode_control = SegmentedControl(
+            picker_top,
+            [("file", tr("bundle_file")), ("folder", tr("project_folder"))],
+            self.path_mode,
+            self.change_path_mode,
+            width=286,
+            height=36,
+            bg=COLORS["surface_alt"],
+        )
+        self.path_mode_control.pack(side="right")
 
-# 现代化主框架
-root_frame = tk.Frame(root, padx=16, pady=16, bg=COLORS["bg_light"])
-root_frame.pack(fill=tk.BOTH, expand=True)
+        self.path_var = tk.StringVar(value=tr("pick_hint_file"))
+        self.path_row = tk.Frame(
+            picker, bg=COLORS["surface"], padx=8, pady=7,
+            highlightthickness=2, highlightbackground=COLORS["primary_light"]
+        )
+        self.path_row.pack(fill="x", pady=(12, 0))
+        self.path_entry = tk.Entry(
+            self.path_row, textvariable=self.path_var, state="readonly",
+            readonlybackground=COLORS["surface"], fg=COLORS["text_primary"],
+            selectbackground=COLORS["primary_light"], selectforeground=COLORS["text_primary"],
+            relief="flat", bd=0, font=FONTS["body"], cursor="hand2",
+            takefocus=True,
+        )
+        self.path_entry.pack(side="left", fill="x", expand=True, padx=(10, 12), ipady=9)
+        self.path_entry.bind("<ButtonRelease-1>", lambda _event: self.browse_path())
+        self.path_entry.bind("<Return>", lambda _event: self.browse_path())
+        self.path_entry.bind("<space>", lambda _event: self.browse_path())
+        self.browse_button = RoundedButton(
+            self.path_row, tr("browse"), self.browse_path, 108, 42,
+            "secondary", bg=COLORS["surface"]
+        )
+        self.browse_button.pack(side="right", padx=(0, 8))
+        self.open_button = RoundedButton(
+            self.path_row, tr("load_browse"), self.open_assets, 180, 42,
+            "primary", bg=COLORS["surface"]
+        )
+        self.open_button.pack(side="right", padx=(0, 8))
+        self.open_button.set_enabled(False)
+        self.drop_hint_label = tk.Label(
+            picker, textvariable=self._var("drop_hint"),
+            bg=COLORS["surface_alt"], fg=COLORS["text_muted"],
+            font=FONTS["tiny"], anchor="w", justify="left",
+        )
+        self.drop_hint_label.pack(fill="x", pady=(9, 0))
 
-# 文件名称显示区域
-file_frame = tk.Frame(root_frame, bg=COLORS["bg_light"])
-file_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        features = tk.Frame(content, bg=COLORS["surface"])
+        features.pack(fill="x", pady=(22, 0))
+        self.feature_vars = []
+        feature_keys = [
+            ("feature_parallel", "feature_parallel_detail"),
+            ("feature_mesh", "feature_mesh_detail"),
+            ("feature_verify", "feature_verify_detail"),
+        ]
+        for index, (label_key, detail_key) in enumerate(feature_keys):
+            card = tk.Frame(features, bg=COLORS["surface"], padx=2)
+            card.grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else 10, 0))
+            label_var, detail_var = tk.StringVar(), tk.StringVar()
+            self.feature_vars.append((label_key, label_var, detail_key, detail_var))
+            tk.Label(
+                card, textvariable=label_var, bg=COLORS["surface"],
+                fg=COLORS["text_primary"], font=FONTS["body_bold"], anchor="w"
+            ).pack(fill="x")
+            tk.Label(
+                card, textvariable=detail_var, bg=COLORS["surface"],
+                fg=COLORS["text_muted"], font=FONTS["tiny"], anchor="w",
+                wraplength=260, justify="left"
+            ).pack(fill="x", pady=(4, 0))
+            features.columnconfigure(index, weight=1)
 
-# 现代化文本框
-text_frame = tk.Frame(file_frame, bg=COLORS["border"], bd=1, relief="solid")
-text_frame.pack(fill=tk.X, expand=True)
+        footer = tk.Frame(self.shell, bg=COLORS["surface_alt"], padx=34, pady=12)
+        footer.pack(fill="x", side="bottom")
+        tk.Label(
+            footer, textvariable=self._var("research_use"), bg=COLORS["surface_alt"],
+            fg=COLORS["text_muted"], font=FONTS["tiny"]
+        ).pack(side="left")
+        tk.Label(
+            footer, textvariable=self._var("ready"), bg=COLORS["surface_alt"],
+            fg=COLORS["success"], font=FONTS["tiny"]
+        ).pack(side="right")
 
-label_file = tk.Text(
-    text_frame, 
-    font=FONTS["body"], 
-    height=1, 
-    wrap="none", 
-    width=28,
-    bg=COLORS["bg_white"],
-    fg=COLORS["text_primary"],
-    relief="flat",
-    padx=8,
-    pady=6
-)
-label_file.insert("1.0", lang["No_File"])
-label_file.config(state="disabled")
-label_file.pack(fill=tk.X, expand=True)
+    def _build_drop_overlay(self):
+        self.drop_overlay_visible = False
+        self.drop_overlay = tk.Frame(
+            self.root, bg=COLORS["canvas"],
+            highlightthickness=2, highlightbackground=COLORS["primary"],
+        )
+        self.drop_overlay.grid_columnconfigure(0, weight=1)
+        self.drop_overlay.grid_rowconfigure(0, weight=1)
 
-# 现代化Info按钮
-Info_BTN = tk.Button(
-    root_frame,
-    text=lang["Info"],
-    font=FONTS["body_bold"],
-    width=10,
-    bg=COLORS["primary"],
-    fg=COLORS["text_white"],
-    activebackground=COLORS["primary_hover"],
-    activeforeground=COLORS["text_white"],
-    relief="flat",
-    cursor="hand2",
-    command=Get_Assests,
-)
-Info_BTN.pack(side=tk.LEFT, padx=(12, 0), ipady=6)
-apply_button_hover(Info_BTN, "primary")
+        self.drop_panel = tk.Frame(
+            self.drop_overlay, bg=COLORS["surface"], padx=68, pady=54,
+            highlightthickness=2, highlightbackground=COLORS["primary_light"],
+        )
+        self.drop_panel.grid(
+            row=0, column=0, padx=74, pady=62, sticky="nsew",
+        )
+        self.drop_panel.grid_columnconfigure(0, weight=1)
+        self.drop_panel.grid_rowconfigure(0, weight=1)
+        drop_content = tk.Frame(self.drop_panel, bg=COLORS["surface"])
+        drop_content.grid(row=0, column=0)
 
-root.protocol("WM_DELETE_WINDOW", on_close)
+        self.drop_icon = tk.Canvas(
+            drop_content, width=104, height=104, bg=COLORS["surface"],
+            highlightthickness=0,
+        )
+        self.drop_icon.pack(pady=(0, 24))
+        self.drop_icon.create_oval(
+            3, 3, 101, 101, fill=COLORS["primary_light"],
+            outline=COLORS["primary"], width=2, tags="drop_ring",
+        )
+        self.drop_icon.create_line(
+            52, 28, 52, 67, fill=COLORS["primary"], width=6,
+            capstyle="round", tags="drop_arrow",
+        )
+        self.drop_icon.create_line(
+            35, 51, 52, 69, 69, 51, fill=COLORS["primary"], width=6,
+            capstyle="round", joinstyle="round", tags="drop_arrow",
+        )
+        self.drop_icon.create_line(
+            31, 80, 73, 80, fill=COLORS["cyan"], width=5,
+            capstyle="round", tags="drop_arrow",
+        )
 
-# 視窗畫面置中
-root.update()  # 讓 Tkinter 先計算出視窗大小
-center_window(root, 100)
+        tk.Label(
+            drop_content, textvariable=self._var("drop_overlay_title"),
+            bg=COLORS["surface"], fg=COLORS["text_primary"],
+            font=FONTS["hero"], anchor="center", justify="center",
+        ).pack()
+        tk.Label(
+            drop_content, textvariable=self._var("drop_overlay_body"),
+            bg=COLORS["surface"], fg=COLORS["text_secondary"],
+            font=FONTS["body"], anchor="center", justify="center",
+            wraplength=620,
+        ).pack(pady=(13, 0))
 
-# 启动后自动显示关于弹窗
-root.after(500, lambda: About.About())
+    def _register_drop_targets(self):
+        for widget in (self.root, self.drop_overlay):
+            widget.drop_target_register(DND_FILES)
+            widget.dnd_bind("<<DropEnter>>", self._on_drop_enter)
+            widget.dnd_bind("<<DropPosition>>", self._on_drop_position)
+            widget.dnd_bind("<<DropLeave>>", self._on_drop_leave)
+            widget.dnd_bind("<<Drop>>", self._on_drop)
 
-root.mainloop()
+    def _show_drop_overlay(self):
+        if self.drop_overlay_visible:
+            return
+        self.drop_overlay_visible = True
+        self.drop_overlay.place(x=0, y=0, relwidth=1, relheight=1)
+        self.drop_overlay.lift()
+        self.drop_icon.itemconfigure("drop_ring", outline=COLORS["accent"], width=3)
+
+    def _hide_drop_overlay(self):
+        if not self.drop_overlay_visible:
+            return
+        self.drop_overlay_visible = False
+        self.drop_overlay.place_forget()
+        self.drop_icon.itemconfigure("drop_ring", outline=COLORS["primary"], width=2)
+
+    def _on_drop_enter(self, _event):
+        self._show_drop_overlay()
+        return COPY
+
+    def _on_drop_position(self, _event):
+        self._show_drop_overlay()
+        return COPY
+
+    def _on_drop_leave(self, _event):
+        self._hide_drop_overlay()
+
+    def _on_drop(self, event):
+        self._hide_drop_overlay()
+        try:
+            paths = list(self.root.tk.splitlist(event.data))
+        except (AttributeError, tk.TclError):
+            paths = []
+        if not paths:
+            return REFUSE_DROP
+        self.root.after_idle(self.handle_dropped_paths, paths)
+        return COPY
+
+    def apply_language(self, code: str):
+        self.lang_code = code
+        self.root.title(tr("app_title"))
+        for key, variable in self.vars.items():
+            variable.set(tr(key))
+        for label_key, label_var, detail_key, detail_var in self.feature_vars:
+            label_var.set(tr(label_key))
+            detail_var.set(tr(detail_key))
+        self.about_button.set_text(tr("about"))
+        self.browse_button.set_text(tr("browse"))
+        self.open_button.set_text(tr("load_browse"))
+        self.language_control.set_selected(code)
+        self.path_mode_control.set_options(
+            [("file", tr("bundle_file")), ("folder", tr("project_folder"))]
+        )
+        self.path_mode_control.set_selected(self.path_mode)
+        if self.selected_path:
+            self.kind_var.set(tr("project_folder" if self.is_directory else "bundle_file"))
+            self.path_var.set(self.selected_path)
+        else:
+            self.kind_var.set(tr("no_project"))
+            self.path_var.set(tr("pick_hint_folder" if self.path_mode == "folder" else "pick_hint_file"))
+
+    def change_language(self, code: str):
+        set_language(code)
+
+    def change_path_mode(self, mode: str):
+        if mode == self.path_mode:
+            return
+        self.path_mode = mode
+        self.selected_path = None
+        self.is_directory = mode == "folder"
+        self.kind_var.set(tr("no_project"))
+        self.path_var.set(tr("pick_hint_folder" if self.is_directory else "pick_hint_file"))
+        self.open_button.set_enabled(False)
+
+    def browse_path(self):
+        if self.path_mode == "folder":
+            self.pick_directory()
+        else:
+            self.pick_file()
+
+    def _set_selection(self, path: str, is_directory: bool):
+        self.selected_path = os.path.abspath(path)
+        self.is_directory = is_directory
+        self.path_mode = "folder" if is_directory else "file"
+        self.path_mode_control.set_selected(self.path_mode)
+        self.kind_var.set(tr("project_folder" if is_directory else "bundle_file"))
+        self.path_var.set(self.selected_path)
+        self.open_button.set_enabled(True)
+
+    @staticmethod
+    def _is_bundle_file(path: str) -> bool:
+        name = os.path.basename(path).lower()
+        extension = os.path.splitext(name)[1]
+        return name.endswith((".assetbundle", ".bundle", ".ab")) or (
+            not extension and "assetbundle" in name
+        )
+
+    def handle_dropped_paths(self, paths: list[str]):
+        existing = [path for path in paths if os.path.exists(path)]
+        if len(existing) != 1:
+            show_dialog(
+                self.root, tr("drop_invalid_title"), tr("drop_single_body"), "warning",
+            )
+            return
+
+        path = existing[0]
+        is_directory = os.path.isdir(path)
+        if not is_directory and not (os.path.isfile(path) and self._is_bundle_file(path)):
+            show_dialog(
+                self.root, tr("drop_invalid_title"), tr("drop_invalid_body"), "warning",
+            )
+            return
+
+        self._set_selection(path, is_directory)
+        self.kind_var.set(tr("drop_loading_folder" if is_directory else "drop_loading_file"))
+        self.root.after(120, self.open_assets)
+
+    def pick_file(self):
+        path = askopenfile(
+            self.root,
+            tr("pick_bundle_title"),
+            [("AssetBundle", ("*.assetbundle", "*.ab", "*.bundle")), (tr("all_files"), ("*",))],
+            os.path.dirname(self.selected_path) if self.selected_path else None,
+        )
+        if path:
+            self._set_selection(path, False)
+
+    def pick_directory(self):
+        path = askdirectory(
+            self.root,
+            tr("pick_bundle_folder_title"),
+            self.selected_path if self.selected_path and os.path.isdir(self.selected_path) else None,
+        )
+        if path:
+            self._set_selection(path, True)
+
+    def open_assets(self):
+        if self.selected_path:
+            list_assets_window(self.selected_path, self.is_directory, self.root)
+
+    def about(self):
+        show_dialog(self.root, tr("app_title"), tr("about_body"))
+
+    def close(self):
+        unsubscribe(self.language_listener)
+        self._hide_drop_overlay()
+        temp_path = os.path.join(os.path.dirname(__file__), "AssetbundleUtils", "tmp")
+        try:
+            if os.path.isdir(temp_path):
+                shutil.rmtree(temp_path)
+        except OSError:
+            pass
+        self.root.destroy()
+
+
+def main():
+    multiprocessing.freeze_support()
+    root = TkinterDnD.Tk()
+    Launcher(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except BaseException as error:
+        _report_startup_error(error)
+        raise SystemExit(1)
