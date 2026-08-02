@@ -128,9 +128,11 @@ class Environment:
             self.files[stream_name] = f
             return f
         except Exception as e:
-            # just to be sure
-            # cuz the SerializedFile detection isn't perfect
-            print("Error loading, reverting to EndianBinaryReader:\n", str(e))
+            # Detection of arbitrary resource blobs is heuristic, but a file
+            # with a recognized container signature must not silently degrade
+            # to a raw reader: that hides truncation/size errors from callers.
+            if typ != FileType.ResourceFile:
+                raise RuntimeError(f"Failed to parse {stream_name}: {e}") from e
             return EndianBinaryReader(file)
 
     def load_zip_file(self, value):
@@ -194,7 +196,9 @@ class Environment:
         Lists all assets / SerializedFiles within this environment.
         """
 
-        def gen_all_asset_files(file, ret=[]):
+        def gen_all_asset_files(file, ret=None):
+            if ret is None:
+                ret = []
             for f in getattr(file, "files", {}).values():
                 if isinstance(f, SerializedFile):
                     ret.append(f)
@@ -269,5 +273,7 @@ class Environment:
                 data = b"".join(data)
                 path = basepath
             else:
-                data = open_f(path).read()
+                # Keep regular files streamable. Reading every file into bytes
+                # here duplicated large bundles before parsing even started.
+                data = open_f(path)
             self.load_file(data, name=path)

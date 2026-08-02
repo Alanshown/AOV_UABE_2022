@@ -13,13 +13,18 @@ def get_resource_path(filename):
 
 def get_writable_path(filename):
     """
-    获取可写文件路径，用于保存用户配置（如Settings.json）
-    打包后保存在exe所在目录，开发环境保存在当前目录
+    获取可写文件路径，用于保存用户配置（如 Settings.json）。
+
+    安装版可能位于 Program Files 或其他只读目录，所以冻结后的应用
+    始终使用当前用户的 LocalAppData。开发环境仍保留原来的项目目录行为。
     """
     if hasattr(sys, '_MEIPASS'):
-        # 打包后，保存在exe所在的目录
-        exe_dir = os.path.dirname(sys.executable)
-        return os.path.join(exe_dir, filename)
+        base = os.environ.get("LOCALAPPDATA")
+        if not base:
+            base = os.path.join(os.path.expanduser("~"), "AppData", "Local")
+        config_dir = os.path.join(base, "AOV_UABE_2022")
+        os.makedirs(config_dir, exist_ok=True)
+        return os.path.join(config_dir, filename)
     return os.path.abspath(filename)
 
 

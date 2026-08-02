@@ -55,8 +55,8 @@ def compress_lzma(data: bytes) -> bytes:
             {"id": lzma.FILTER_LZMA1, "dict_size": 524288, "lc": 3, "lp": 0, "pb": 2, }
         ],
     )
-    ec.compress(data)
-    return b"]\x00\x00\x08\x00" + ec.flush()
+    payload = ec.compress(data) + ec.flush()
+    return b"]\x00\x00\x08\x00" + payload
 
 
 # LZ4

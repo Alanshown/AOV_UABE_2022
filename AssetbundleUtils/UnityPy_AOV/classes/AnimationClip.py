@@ -7,9 +7,11 @@ from ..enums import ClassIDType
 from ..math import Quaternion, Vector3
 from ..streams import EndianBinaryReader
 
-try:
-    from UnityPy import UnityPyBoost
-except ImportError:
+from ..UnityPyBoost import UnityPyBoost
+
+if UnityPyBoost is not None and not all(
+    hasattr(UnityPyBoost, name) for name in ("unpack_floats", "unpack_ints")
+):
     UnityPyBoost = None
 
 

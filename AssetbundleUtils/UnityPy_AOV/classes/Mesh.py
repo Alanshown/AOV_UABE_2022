@@ -12,9 +12,9 @@ import struct
 from enum import IntEnum
 from ..export import MeshExporter
 
-try:
-    from UnityPy import UnityPyBoost
-except:
+from ..UnityPyBoost import UnityPyBoost
+
+if UnityPyBoost is not None and not hasattr(UnityPyBoost, "unpack_vertexdata"):
     UnityPyBoost = None
 
 
@@ -495,6 +495,10 @@ class Mesh(NamedObject):
 
         self.m_MeshUsageFlags = reader.read_int()
         if version >= (5,):  # 5.0 and up
+            if version >= (2022,):
+                # Added to the serialized Mesh layout in modern Unity. Missing
+                # this field shifts both collision blobs and StreamingInfo.
+                self.m_CookingOptions = reader.read_u_int()
             self.m_BakedConvexCollisionMesh = reader.read_bytes(reader.read_int())
             reader.align_stream()
             self.m_BakedTriangleCollisionMesh = reader.read_bytes(reader.read_int())
@@ -529,12 +533,15 @@ class Mesh(NamedObject):
         version = self.version
         m_VertexData = self.m_VertexData
         m_VertexCount = self.m_VertexCount = m_VertexData.m_VertexCount
+        has_blend_weight_channel = (
+            len(m_VertexData.m_Channels) > 12
+            and m_VertexData.m_Channels[12].dimension > 0
+        )
 
         for chn, m_Channel in enumerate(m_VertexData.m_Channels):
             if m_Channel.dimension > 0:
                 m_Stream = m_VertexData.m_Streams[m_Channel.stream]
-                channelMask = bin(m_Stream.channelMask)[::-1]
-                if channelMask[chn] == "1":
+                if m_Stream.channelMask & (1 << chn):
                     if version[0] < 2018 and chn == 2 and m_Channel.format == 2:
                         m_Channel.dimension = 4
 
@@ -542,6 +549,18 @@ class Mesh(NamedObject):
                         MeshHelper.ToVertexFormat(m_Channel.format, self.reader.version)
                     )
                     swap = self.reader.endian == "<" and componentByteSize > 1
+                    channel_size = m_Channel.dimension * componentByteSize
+                    required_size = (
+                        m_Stream.offset
+                        + m_Channel.offset
+                        + max(0, m_VertexCount - 1) * m_Stream.stride
+                        + channel_size
+                    )
+                    if required_size > len(m_VertexData.m_DataSize):
+                        raise ValueError(
+                            f"Vertex channel {chn} needs {required_size} bytes, "
+                            f"but only {len(m_VertexData.m_DataSize)} are available"
+                        )
 
                     if UnityPyBoost:
                         componentBytes = UnityPyBoost.unpack_vertexdata(
@@ -631,6 +650,11 @@ class Mesh(NamedObject):
                                     self.m_Skin[i].boneIndex[j] = componentsIntArray[
                                         i * m_Channel.dimension + j
                                     ]
+                                # Unity omits BlendWeight for rigidly skinned
+                                # vertices and serializes one BlendIndices value.
+                                # The omitted weight is implicitly 1.0.
+                                if not has_blend_weight_channel and m_Channel.dimension == 1:
+                                    self.m_Skin[i].weight[0] = 1.0
                     else:
                         if chn == 0:  # kShaderChannelVertex
                             self.m_Vertices = componentsFloatArray

@@ -34,6 +34,19 @@ class ArchiveStorageDecryptor:
         decrypted_data = key0.decrypt(data[0:blocksize], initial=bytearray(self.BlockSM4IV))
         return decrypted_data + unencrypted_part
 
+    def encrypt_block(self, data: bytes) -> bytes:
+        """Encrypt complete SM4-CBC blocks and retain Unity's raw suffix."""
+        if self.skip_blockinfo:
+            return data
+
+        blocksize = (len(data) // 16) * 16
+        unencrypted_part = data[blocksize:]
+        key0 = SM4Key(self.BlockSM4Key)
+        encrypted_data = key0.encrypt(
+            data[:blocksize], initial=bytearray(self.BlockSM4IV)
+        )
+        return encrypted_data + unencrypted_part
+
     def set_key(self, key: bytes, iv: Optional[bytes] = None):
         """
         Update SM4 key and optionally IV at runtime
@@ -41,4 +54,3 @@ class ArchiveStorageDecryptor:
         self.BlockSM4Key = key
         if iv:
             self.BlockSM4IV = iv
-
