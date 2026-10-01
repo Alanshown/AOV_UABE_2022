@@ -2,7 +2,7 @@
 # 🎮 UABE for Arena of Valor (AOV_UABE_2022)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python Version](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
 [![Web Version](https://img.shields.io/badge/🌐_Web_Version-Online-brightgreen.svg)](http://ld.ymkeji.xyz/)
 
@@ -201,3 +201,8 @@ J --> I
     <p style="margin: 16px 0 0; color: #f0f0f0;">If this tool helps you, a cup of coffee keeps the updates coming!</p>
   </div>
 </div>
+
+
+## 2026-10
+
+Current source adds Mesh skin/extended-stream transfer, bounds updates, editable JSON Dump import/export and an optional preview mode. Python 3.10+ and system Tkinter are required. See [audit and limitations](docs/issue-audit-2026-10-01.md) and [workflow guide](docs/MESH_IMPORT_GUIDE.md). OBJ does not supply a new skeleton; passing source regressions does not establish in-game compatibility. Published older EXEs can differ from current source.

@@ -13,6 +13,17 @@ import multiprocessing
 import queue
 
 
+def apply_project_overrides(project, overrides):
+    changed = []
+    for file_index, path_id, raw in overrides:
+        target = project.object(int(file_index), int(path_id))
+        if target is not None:
+            target.set_raw_data(raw)
+            changed.append((int(file_index), int(path_id)))
+    if changed:
+        project.refresh_serialized_objects(changed)
+
+
 def preview_worker(
     request_queue, result_queue, worker_id: int, latest_generation=None
 ):
@@ -27,6 +38,7 @@ def preview_worker(
     cached_effect_paths = None
     cached_effect_project = None
     payload_cache = OrderedDict()
+    cached_revision = None
     parent = multiprocessing.parent_process()
 
     def remember(cache_key, payload):
@@ -79,6 +91,14 @@ def preview_worker(
             replacement_raw = task.get("replacement_raw")
         else:
             generation, bundle_path, path_id, asset_type, replacement_raw = task
+        revision = task.get("edit_revision", 0) if isinstance(task, dict) else 0
+        overrides = task.get("serialized_overrides", []) if isinstance(task, dict) else []
+        if cached_revision != revision:
+            cached_revision = revision
+            cached_environment = None
+            cached_animation_project = None
+            cached_effect_project = None
+            payload_cache.clear()
         try:
             if isinstance(task, dict) and task.get("kind") == "image_override":
                 payload = bytes(task.get("payload") or b"")
@@ -97,6 +117,8 @@ def preview_worker(
                 effect_paths = tuple(task["paths"])
                 if cached_effect_project is None or cached_effect_paths != effect_paths:
                     cached_effect_project = EffectProjectIndex(effect_paths)
+                    apply_project_overrides(cached_effect_project.project, overrides)
+                    cached_effect_project.rebuild()
                     cached_effect_paths = effect_paths
                 builder = (
                     build_material_preview_payload
@@ -117,6 +139,8 @@ def preview_worker(
                 effect_paths = tuple(task["paths"])
                 if cached_effect_project is None or cached_effect_paths != effect_paths:
                     cached_effect_project = EffectProjectIndex(effect_paths)
+                    apply_project_overrides(cached_effect_project.project, overrides)
+                    cached_effect_project.rebuild()
                     cached_effect_paths = effect_paths
                 cache_key = (
                     "effect", effect_paths, task["root_id"],
@@ -171,6 +195,7 @@ def preview_worker(
                     or cached_animation_paths != animation_paths
                 ):
                     cached_animation_project = AnimationProjectIndex(animation_paths)
+                    apply_project_overrides(cached_animation_project, overrides)
                     cached_animation_paths = animation_paths
                 animation_file_index = int(task["animation_file_index"])
                 if replacement_raw is not None:
@@ -237,6 +262,10 @@ def preview_worker(
                     cached_missing_dependencies,
                 ) = load_bundle_with_dependencies(bundle_path)
                 cached_path = bundle_path
+                file_index = int(task.get("file_index", -1)) if isinstance(task, dict) else -1
+                for override_index, override_id, raw in overrides:
+                    if int(override_index) == file_index and int(override_id) in cached_objects:
+                        cached_objects[int(override_id)].set_raw_data(raw)
             obj = cached_objects.get(int(path_id))
             if obj is None:
                 raise KeyError(f"PathID {path_id} was not found in {bundle_path}")

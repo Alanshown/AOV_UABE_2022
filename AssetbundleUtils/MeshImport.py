@@ -1,14 +1,15 @@
 """Safe OBJ-to-Unity Mesh replacement.
 
-Only the serialized mesh payload is changed.  The ObjectReader, PathID,
-container entry and every unrelated Mesh field remain attached to the same
-object.  A same-vertex-count import patches the existing vertex streams in
-place; topology-changing imports build a compact Unity 2022 vertex layout.
+The ObjectReader, PathID and container entry retain their identity. Vertex
+channels are transferred together using a geometry correspondence, including
+skin/extra UV/color streams; a compact layout is only a fallback for packed-only
+meshes. Renderer bounds are synchronized separately by the caller.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from AssetbundleUtils.TypeTreeImport import clone_typetree
 import math
 import os
 import struct
@@ -27,6 +28,8 @@ class ObjMesh:
     uvs: List[Vec2]
     tangents: List[Vec4]
     submeshes: List[Tuple[str, List[int]]]
+    has_uvs: bool = True
+    has_normals: bool = True
 
     @property
     def indices(self) -> List[int]:
@@ -45,6 +48,7 @@ class MeshImportResult:
     remapped_skin_weights: bool
     cleared_blend_shapes: bool
     cleared_collision_data: bool
+    approximate_mapping: bool = False
 
     @property
     def summary(self) -> str:
@@ -171,6 +175,7 @@ def parse_obj(path: str) -> ObjMesh:
     groups: Dict[str, List[int]] = {"default": []}
     group_order = ["default"]
     active_group = "default"
+    object_group = "default"
 
     def select_group(name: str) -> None:
         nonlocal active_group
@@ -200,9 +205,16 @@ def parse_obj(path: str) -> ObjMesh:
                 if len(values) < 3:
                     raise ValueError(f"OBJ 第 {line_number} 行的法线不足 3 个分量")
                 x, y, z = map(float, values[:3])
+                if not all(math.isfinite(value) for value in (x, y, z)):
+                    raise ValueError("OBJ contains non-finite normals")
                 source_normals.append(_normalize((-x, y, z)))
-            elif command in ("g", "usemtl"):
-                select_group(" ".join(values))
+            elif command == "g":
+                object_group = " ".join(values) or "default"
+                select_group(object_group)
+            elif command == "usemtl":
+                active_material = " ".join(values)
+                # Material names are labels, never external Unity references.
+                select_group(f"{object_group}|{active_material}" if active_material else object_group)
             elif command == "f":
                 if len(values) < 3:
                     raise ValueError(f"OBJ 第 {line_number} 行的面少于 3 个顶点")
@@ -240,6 +252,20 @@ def parse_obj(path: str) -> ObjMesh:
     submeshes = [(name, groups[name]) for name in group_order if groups[name]]
     if not submeshes:
         raise ValueError("OBJ 中没有可导入的三角面")
+    # OBJ faces encounter vertices in a different order than Unity's buffers.
+    # Retain source position order (and split UV/normal seams deterministically).
+    ordered = sorted(lookup, key=lambda key: (key[0], -1 if key[1] is None else key[1],
+                                             -1 if key[2] is None else key[2]))
+    old_order = [lookup[key] for key in ordered]
+    remap = {old: new for new, old in enumerate(old_order)}
+    vertices = [vertices[index] for index in old_order]
+    uvs = [uvs[index] for index in old_order]
+    normals = [normals[index] for index in old_order]
+    submeshes = [(name, [remap[index] for index in values]) for name, values in submeshes]
+    if not all(math.isfinite(value) for vectors in (vertices, uvs) for vector in vectors for value in vector):
+        raise ValueError("OBJ contains non-finite vertex/UV data")
+    if not all(math.isfinite(value) for vector in positions + source_normals for value in vector):
+        raise ValueError("OBJ contains non-finite position/normal data")
     indices = [index for _name, values in submeshes for index in values]
     generated_normals = _compute_normals(vertices, indices)
     final_normals = [
@@ -247,7 +273,8 @@ def parse_obj(path: str) -> ObjMesh:
         for index, value in enumerate(normals)
     ]
     tangents = _compute_tangents(vertices, final_normals, uvs, indices)
-    return ObjMesh(vertices, final_normals, uvs, tangents, submeshes)
+    return ObjMesh(vertices, final_normals, uvs, tangents, submeshes,
+                   bool(texcoords), bool(source_normals))
 
 
 def _bounds(vertices: Sequence[Vec3], indices: Optional[Iterable[int]] = None) -> dict:
@@ -310,118 +337,110 @@ def _pack_component(value: float, vertex_format: int, endian: str) -> bytes:
     raise ValueError(f"顶点通道格式 {vertex_format} 不支持浮点 Mesh 导入")
 
 
-def _patch_existing_vertex_streams(obj, tree: dict, parsed, mesh: ObjMesh) -> bool:
+def _vertex_mapping(parsed, mesh: ObjMesh) -> Optional[List[int]]:
+    count = int(getattr(parsed, "m_VertexCount", 0))
+    flat = list(getattr(parsed, "m_Vertices", ()) or ())
+    if count <= 0 or len(flat) < count * 3:
+        return None
+    components = len(flat) // count
+    old = [tuple(flat[i * components:i * components + 3]) for i in range(count)]
+    if not all(math.isfinite(v) for point in old for v in point):
+        raise ValueError("Target Mesh contains non-finite positions")
+    # Exact exported positions tolerate the OBJ exporter's seven-digit rounding.
+    if len(mesh.vertices) == count and all(
+        all(math.isclose(a, b, rel_tol=2e-6, abs_tol=1e-7) for a, b in zip(point, old[i]))
+        for i, point in enumerate(mesh.vertices)
+    ):
+        return list(range(count))
+    if len(mesh.vertices) == count and mesh.indices == list(getattr(parsed, "m_Indices", ())):
+        offset = tuple(mesh.vertices[0][axis] - old[0][axis] for axis in range(3))
+        if all(all(math.isclose(point[axis] - old[i][axis], offset[axis], rel_tol=2e-6, abs_tol=1e-6)
+                   for axis in range(3)) for i, point in enumerate(mesh.vertices)):
+            return list(range(count))
+    # Nearest-neighbour transfer is explicit fallback for edited/third-party meshes.
+    # Use a spatial index; resolve coincident seam vertices by their UVs.
+    from scipy.spatial import cKDTree
+    import numpy as np
+    old_uv = list(getattr(parsed, "m_UV0", ()) or ())
+    uv_components = len(old_uv) // count if old_uv else 0
+    locator = cKDTree(old)
+    distances, candidates = locator.query(mesh.vertices, k=min(8, count))
+    distances = np.asarray(distances).reshape(len(mesh.vertices), -1)
+    candidates = np.asarray(candidates).reshape(len(mesh.vertices), -1)
+    mapping = []
+    for i, point in enumerate(mesh.vertices):
+        nearest_distance = float(distances[i, 0])
+        choices = [int(candidate) for distance, candidate in zip(distances[i], candidates[i])
+                   if math.isclose(float(distance), nearest_distance, rel_tol=1e-6, abs_tol=1e-7)]
+        if mesh.has_uvs and uv_components >= 2:
+            chosen = min(choices, key=lambda j: sum(
+                (mesh.uvs[i][axis] - old_uv[j * uv_components + axis]) ** 2 for axis in range(2)))
+        else:
+            chosen = choices[0]
+        mapping.append(chosen)
+    return mapping
+
+
+def _patch_existing_vertex_streams(obj, tree: dict, parsed, mesh: ObjMesh,
+                                   mapping: Optional[List[int]] = None) -> bool:
     vertex_data = tree.get("m_VertexData")
     if not isinstance(vertex_data, dict):
         return False
     channels = vertex_data.get("m_Channels")
-    if not isinstance(channels, list) or len(channels) <= 4:
-        return False
     parsed_data = getattr(parsed, "m_VertexData", None)
-    if parsed_data is None or parsed_data.m_VertexCount != len(mesh.vertices):
+    if not isinstance(channels, list) or len(channels) <= 4 or parsed_data is None:
+        return False
+    if mapping is None:
+        mapping = _vertex_mapping(parsed, mesh)
+    if mapping is None or not channels[0].get("dimension"):
+        return False
+    # Packed-only skin cannot survive clearing m_CompressedMesh through this path.
+    skin = getattr(parsed, "m_Skin", ())
+    if skin and not any(ch.get("dimension") for ch in channels[12:14]):
         return False
     streams = getattr(parsed_data, "m_Streams", None)
     if not streams:
         parsed_data.GetStreams()
         streams = parsed_data.m_Streams
-    raw = bytearray(bytes(parsed_data.m_DataSize))
-    values_by_channel = {
-        0: mesh.vertices,
-        1: mesh.normals,
-        2: mesh.tangents,
-        4: mesh.uvs,
-    }
-    if not channels[0].get("dimension"):
-        return False
-
+    source = bytes(parsed_data.m_DataSize)
+    raw = bytearray()
+    offsets = {}
+    for stream_index, stream in sorted(streams.items()):
+        offsets[stream_index] = len(raw)
+        for old_index in mapping:
+            start = stream.offset + old_index * stream.stride
+            end = start + stream.stride
+            if start < 0 or end > len(source):
+                return False
+            raw.extend(source[start:end])
+        raw.extend(b"\0" * ((-len(raw)) % 16))
+    values_by_channel = {0: mesh.vertices, 1: mesh.normals}
+    if mesh.has_uvs:
+        values_by_channel.update({2: mesh.tangents, 4: mesh.uvs})
     for channel_index, values in values_by_channel.items():
-        if channel_index >= len(channels):
-            continue
         channel = channels[channel_index]
-        dimension = int(channel.get("dimension", 0))
-        if dimension <= 0:
+        dimension = int(channel.get("dimension", 0)) & 0xF
+        if dimension <= 0 or (channel_index == 1 and not mesh.has_normals and skin):
             continue
-        vertex_format = int(channel.get("format", 0))
         stream_index = int(channel.get("stream", 0))
         stream = streams.get(stream_index)
         if stream is None:
             return False
-        component_count = min(dimension, len(values[0]))
         for vertex_index, vector in enumerate(values):
-            cursor = stream.offset + channel.get("offset", 0) + vertex_index * stream.stride
-            for component in range(component_count):
-                encoded = _pack_component(vector[component], vertex_format, obj.reader.endian)
+            cursor = offsets[stream_index] + int(channel.get("offset", 0)) + vertex_index * stream.stride
+            for component in range(min(dimension, len(vector))):
+                encoded = _pack_component(vector[component], int(channel.get("format", 0)), obj.reader.endian)
                 end = cursor + len(encoded)
                 if cursor < 0 or end > len(raw):
                     return False
                 raw[cursor:end] = encoded
                 cursor = end
-
     vertex_data["m_VertexCount"] = len(mesh.vertices)
     vertex_data["m_DataSize"] = bytes(raw)
     return True
 
 
-def _nearest_skin_weights(parsed, vertices: Sequence[Vec3]):
-    """Map new vertices to the nearest old skin sample using a spatial grid."""
-
-    old_count = int(getattr(parsed, "m_VertexCount", 0))
-    old_flat = list(getattr(parsed, "m_Vertices", ()) or ())
-    old_skin = list(getattr(parsed, "m_Skin", ()) or ())
-    if old_count <= 0 or len(old_skin) != old_count or len(old_flat) < old_count * 3:
-        return None
-    components = len(old_flat) // old_count
-    old_vertices = [
-        tuple(old_flat[index * components : index * components + 3])
-        for index in range(old_count)
-    ]
-    minimum = [min(value[axis] for value in old_vertices) for axis in range(3)]
-    maximum = [max(value[axis] for value in old_vertices) for axis in range(3)]
-    diagonal = math.sqrt(sum((maximum[axis] - minimum[axis]) ** 2 for axis in range(3)))
-    cell_size = max(diagonal / max(8.0, old_count ** (1.0 / 3.0)), 1e-7)
-
-    def cell(value):
-        return tuple(math.floor((value[axis] - minimum[axis]) / cell_size) for axis in range(3))
-
-    grid: Dict[Tuple[int, int, int], List[int]] = {}
-    for index, value in enumerate(old_vertices):
-        grid.setdefault(cell(value), []).append(index)
-
-    mapped = []
-    fallback_step = max(1, old_count // 4096)
-    fallback = range(0, old_count, fallback_step)
-    for value in vertices:
-        origin = cell(value)
-        candidates = []
-        for radius in range(4):
-            for x in range(origin[0] - radius, origin[0] + radius + 1):
-                for y in range(origin[1] - radius, origin[1] + radius + 1):
-                    for z in range(origin[2] - radius, origin[2] + radius + 1):
-                        if radius and max(abs(x-origin[0]), abs(y-origin[1]), abs(z-origin[2])) != radius:
-                            continue
-                        candidates.extend(grid.get((x, y, z), ()))
-            if candidates:
-                break
-        search = candidates or fallback
-        nearest = min(
-            search,
-            key=lambda index: sum(
-                (old_vertices[index][axis] - value[axis]) ** 2 for axis in range(3)
-            ),
-        )
-        skin = old_skin[nearest]
-        weights = [float(item) for item in skin.weight[:4]]
-        total = sum(max(0.0, item) for item in weights)
-        if total <= 1e-8:
-            weights = [1.0, 0.0, 0.0, 0.0]
-        else:
-            weights = [max(0.0, item) / total for item in weights]
-        indices = [max(0, int(item)) for item in skin.boneIndex[:4]]
-        mapped.append((weights, indices))
-    return mapped
-
-
-def _rebuild_vertex_stream(tree: dict, mesh: ObjMesh, endian: str, parsed) -> bool:
+def _rebuild_vertex_stream(tree: dict, mesh: ObjMesh, endian: str, parsed, mapping=None) -> bool:
     vertex_data = tree.get("m_VertexData")
     if not isinstance(vertex_data, dict):
         raise ValueError("目标 Mesh 没有可写入的 m_VertexData")
@@ -434,7 +453,18 @@ def _rebuild_vertex_stream(tree: dict, mesh: ObjMesh, endian: str, parsed) -> bo
     channels[1].update({"stream": 0, "offset": 12, "format": 0, "dimension": 3})
     channels[2].update({"stream": 0, "offset": 24, "format": 0, "dimension": 4})
     channels[4].update({"stream": 0, "offset": 40, "format": 0, "dimension": 2})
-    mapped_skin = _nearest_skin_weights(parsed, mesh.vertices)
+    skin = list(getattr(parsed, "m_Skin", ()) or ())
+    if mapping is not None and skin:
+        mapped_skin = []
+        for index in mapping:
+            sample = skin[index]
+            weights = [max(0.0, float(value)) for value in sample.weight[:4]]
+            total = sum(weights)
+            if total <= 1e-8:
+                raise ValueError("Target Mesh has zero skin weights")
+            mapped_skin.append(([value / total for value in weights], list(sample.boneIndex[:4])))
+    else:
+        mapped_skin = None
     if mapped_skin is not None and len(channels) > 13:
         channels[12].update({"stream": 0, "offset": 48, "format": 0, "dimension": 4})
         channels[13].update({"stream": 0, "offset": 64, "format": 10, "dimension": 4})
@@ -495,22 +525,33 @@ def replace_mesh_from_obj(obj, obj_path: str) -> MeshImportResult:
     original_raw = obj.get_raw_data()
     parsed = obj.read(False)
     original_name = getattr(parsed, "m_Name", None) or f"Mesh_{obj.path_id}"
-    tree = obj.read_typetree()
+    tree = clone_typetree(obj.read_typetree())
 
     try:
-        preserved = _patch_existing_vertex_streams(obj, tree, parsed, mesh)
-        remapped_skin = False
+        mapping = _vertex_mapping(parsed, mesh)
+        identity = mapping == list(range(int(parsed.m_VertexCount)))
+        topology_preserved = identity and mesh.indices == list(parsed.m_Indices)
+        variable_weights = tree.get("m_VariableBoneCountWeights", {})
+        if not topology_preserved and isinstance(variable_weights, dict) and variable_weights.get("m_Data"):
+            raise ValueError("Variable bone-count weights require a dedicated remapper; refusing to discard them")
+        preserved = _patch_existing_vertex_streams(obj, tree, parsed, mesh, mapping)
+        remapped_skin = bool(getattr(parsed, "m_Skin", ())) and not identity
         if not preserved:
-            remapped_skin = _rebuild_vertex_stream(tree, mesh, obj.reader.endian, parsed)
+            remapped_skin = _rebuild_vertex_stream(tree, mesh, obj.reader.endian, parsed, mapping)
+        if not preserved and (tree.get("m_BindPose") or tree.get("m_BoneNameHashes")) and not remapped_skin:
+            raise ValueError("Cannot recover target skin weights; refusing an unskinned replacement")
         _write_indices_and_submeshes(tree, mesh, obj.reader.endian)
         tree["m_LocalAABB"] = _bounds(mesh.vertices)
+        tree["m_MeshCompression"] = 0
+        if tree.get("m_BonesAABB"):
+            _update_bone_bounds(tree, mesh, parsed, mapping)
 
         if isinstance(tree.get("m_CompressedMesh"), dict):
             _clear_packed_mesh(tree["m_CompressedMesh"])
         stream_data = tree.get("m_StreamData")
         if isinstance(stream_data, dict):
             stream_data.update({"offset": 0, "size": 0, "path": ""})
-        cleared_shapes = _clear_blend_shapes(tree.get("m_Shapes")) if not preserved else False
+        cleared_shapes = _clear_blend_shapes(tree.get("m_Shapes")) if not topology_preserved else False
         cleared_collision = False
         for field in ("m_BakedConvexCollisionMesh", "m_BakedTriangleCollisionMesh"):
             if field in tree and tree[field]:
@@ -529,12 +570,20 @@ def replace_mesh_from_obj(obj, obj_path: str) -> MeshImportResult:
             raise ValueError("序列化后的子网格数与 OBJ 不一致")
         if validated.m_Indices and max(validated.m_Indices) >= validated.m_VertexCount:
             raise ValueError("序列化后的 Mesh 含有越界索引")
+        validate_mesh_payload(obj)
         if not validated.export():
             raise ValueError("序列化后的 Mesh 无法重新导出预览")
     except Exception:
         obj.set_raw_data(original_raw)
         raise
 
+    old_count = int(parsed.m_VertexCount)
+    old_components = len(parsed.m_Vertices) // old_count
+    approximate = bool(mapping is not None and not identity and any(
+        any(not math.isclose(float(point[axis]), float(parsed.m_Vertices[old_index * old_components + axis]),
+                             rel_tol=2e-6, abs_tol=1e-7) for axis in range(3))
+        for point, old_index in zip(mesh.vertices, mapping)
+    ))
     return MeshImportResult(
         source_path=source_path,
         path_id=original_path_id,
@@ -546,4 +595,138 @@ def replace_mesh_from_obj(obj, obj_path: str) -> MeshImportResult:
         remapped_skin_weights=remapped_skin,
         cleared_blend_shapes=cleared_shapes,
         cleared_collision_data=cleared_collision,
+        approximate_mapping=approximate,
     )
+
+
+def _update_bone_bounds(tree, mesh, parsed, mapping):
+    """Recompute each skin bone's bounds in the original bind-pose space."""
+    poses = tree.get("m_BindPose", [])
+    skin = list(getattr(parsed, "m_Skin", ()) or ())
+    bounds = tree["m_BonesAABB"]
+    if not poses or not skin or mapping is None:
+        raise ValueError("Cannot reconstruct bone-space bounds without bind poses and weights")
+    points = [[] for _ in bounds]
+    for vertex, old_index in zip(mesh.vertices, mapping):
+        weights = skin[old_index]
+        for weight, bone in zip(weights.weight, weights.boneIndex):
+            if weight <= 0:
+                continue
+            bone = int(bone)
+            if not 0 <= bone < len(bounds) or bone >= len(poses):
+                raise ValueError("Skin bone index exceeds bind pose/bone bounds")
+            pose = poses[bone]
+            point = tuple(sum(float(pose[f"e{row}{col}"]) * vertex[col] for col in range(3))
+                          + float(pose[f"e{row}3"]) for row in range(3))
+            points[bone].append(point)
+    for i, values in enumerate(points):
+        if values:
+            bounds[i] = {
+                "m_Min": dict(zip("xyz", [min(p[a] for p in values) for a in range(3)])),
+                "m_Max": dict(zip("xyz", [max(p[a] for p in values) for a in range(3)])),
+            }
+
+
+def validate_mesh_payload(obj):
+    """Runtime invariants beyond the viewer's ability to draw triangles."""
+    mesh = obj.read(False)
+    count = int(mesh.m_VertexCount)
+    if count <= 0 or not mesh.m_Indices or max(mesh.m_Indices) >= count or min(mesh.m_Indices) < 0:
+        raise ValueError(f"Mesh {obj.path_id} has empty/out-of-range geometry")
+    if not all(math.isfinite(float(value)) for value in mesh.m_Vertices):
+        raise ValueError(f"Mesh {obj.path_id} has non-finite positions")
+    if len(mesh.m_Indices) % 3:
+        raise ValueError("Mesh triangle index count is not divisible by three")
+    skin = list(getattr(mesh, "m_Skin", ()) or ())
+    tree = obj.read_typetree()
+    poses = tree.get("m_BindPose", [])
+    bounds = tree.get("m_LocalAABB", {})
+    if bounds:
+        center, extent = bounds["m_Center"], bounds["m_Extent"]
+        if any(not math.isfinite(float(center[a])) or not math.isfinite(float(extent[a]))
+               or extent[a] < 0 for a in "xyz"):
+            raise ValueError("Mesh has invalid bounds")
+    index_size = 2 if int(tree.get("m_IndexFormat", 0)) == 0 else 4
+    for submesh in tree.get("m_SubMeshes", []):
+        start, length = int(submesh["firstByte"]), int(submesh["indexCount"])
+        if start < 0 or start % index_size or length <= 0 or start + length * index_size > len(tree["m_IndexBuffer"]):
+            raise ValueError("Mesh submesh exceeds index buffer")
+    if poses and len(skin) != count:
+        raise ValueError(f"Mesh {obj.path_id} lost skin weights")
+    for sample in skin:
+        if any(not math.isfinite(float(w)) or w < 0 for w in sample.weight):
+            raise ValueError("Mesh skin contains invalid weights")
+        if sum(sample.weight) <= 1e-8:
+            raise ValueError("Mesh skin contains zero-weight vertices")
+        for weight, index in zip(sample.weight, sample.boneIndex):
+            if weight > 0 and (int(index) < 0 or (poses and int(index) >= len(poses))):
+                raise ValueError("Mesh skin contains out-of-range bone indices")
+    vertex_data = getattr(mesh, "m_VertexData", None)
+    if vertex_data is not None:
+        for channel in vertex_data.m_Channels:
+            if channel.dimension:
+                stream = vertex_data.m_Streams[channel.stream]
+                from AssetbundleUtils.UnityPy_AOV.classes.Mesh import MeshHelper
+                size = MeshHelper.GetFormatSize(MeshHelper.ToVertexFormat(channel.format, obj.version))
+                end = stream.offset + (count - 1) * stream.stride + channel.offset + channel.dimension * size
+                if end > len(vertex_data.m_DataSize):
+                    raise ValueError("Mesh vertex stream exceeds serialized payload")
+    return mesh
+
+
+def synchronize_mesh_renderer_bounds(environments, mesh_obj):
+    """Expand referencing renderer bounds and validate existing material slots.
+
+    Original materials/PPtrs are retained. OBJ MTL names never create dependencies.
+    Returns changed renderer ObjectReaders for dirty tracking and rollback.
+    """
+    new_bounds = mesh_obj.read_typetree()["m_LocalAABB"]
+    submesh_count = len(mesh_obj.read(False).m_SubMeshes)
+    updates = []
+    for file_index, environment in enumerate(environments):
+        if environment is None:
+            continue
+        for renderer in environment.objects:
+            if renderer.type.name != "SkinnedMeshRenderer":
+                continue
+            tree = renderer.read_typetree()
+            pointer = tree.get("m_Mesh", {})
+            if int(pointer.get("m_PathID", 0)) != int(mesh_obj.path_id):
+                continue
+            if int(pointer.get("m_FileID", 0)) == 0:
+                matches = renderer.assets_file is mesh_obj.assets_file
+            else:
+                target = renderer.read(False).m_Mesh.get_obj()
+                matches = target is not None and target.assets_file is mesh_obj.assets_file and target.path_id == mesh_obj.path_id
+            if not matches:
+                continue
+            materials = tree.get("m_Materials", [])
+            if materials and submesh_count > len(materials):
+                raise ValueError("Imported Mesh has more submeshes than the target renderer's material slots")
+            updated = clone_typetree(tree)
+            changed_bounds = False
+            for field_name in ("m_AABB", "m_LocalAABB"):
+                original = tree.get(field_name)
+                if not isinstance(original, dict) or "m_Center" not in original:
+                    continue
+                points = []
+                for bounds in (original, new_bounds):
+                    center, extent = bounds["m_Center"], bounds["m_Extent"]
+                    points.extend(tuple(center[a] + sign * extent[a] for a in "xyz") for sign in (-1, 1))
+                expanded = _bounds(points)
+                if expanded != original:
+                    updated[field_name] = expanded
+                    changed_bounds = True
+            if changed_bounds:
+                updates.append((file_index, renderer, updated))
+    changed = []
+    try:
+        for file_index, renderer, tree in updates:
+            raw = renderer.get_raw_data()
+            changed.append((file_index, renderer, raw))
+            renderer.save_typetree(tree)
+    except Exception:
+        for _, renderer, raw in changed:
+            renderer.set_raw_data(raw)
+        raise
+    return changed

@@ -309,6 +309,19 @@ class ObjectReader:
             nodes = self.serialized_type.nodes
         if not nodes:
             nodes = get_typetree_nodes(self.class_id, self.version)
+            # AOV's modern Mesh payload includes an extra UInt32 before the
+            # compression flags. The class parser already reads m_IsInUse;
+            # stock TPK fallback nodes must describe the same byte layout.
+            # Never alter an embedded asset-specific TypeTree or the TPK cache.
+            if self.class_id == 43 and self.version >= (2019,):
+                nodes = list(nodes)
+                position = next((index for index, node in enumerate(nodes)
+                                 if node.m_Level == 1 and node.m_Name == "m_MeshCompression"), None)
+                if position is not None and not any(node.m_Name == "m_IsInUse" for node in nodes):
+                    nodes.insert(position, TypeTreeHelper.TypeTreeNode(
+                        m_Type="UInt32", m_Name="m_IsInUse", m_Level=1,
+                        m_ByteSize=4, m_Index=position, m_Version=1, m_MetaFlag=0,
+                    ))
         if not nodes:
             raise TypeTreeError("There are no TypeTree nodes for this object.")
         return nodes
