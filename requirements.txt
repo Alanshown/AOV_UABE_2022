@@ -1,6 +1,6 @@
 lz4==4.3.2
 brotli==1.0.9
-Pillow==9.4.0
+Pillow==10.4.0
 texture2ddecoder==1.0.4
 etcpak==0.9.8
 astc-encoder-py >= 0.1.9
