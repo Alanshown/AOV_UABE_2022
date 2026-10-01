@@ -66,6 +66,16 @@ def export_mesh_obj(m_Mesh, material_names: list = None):
 
     # region Face
     sum = 0
+    def face_vertex(index):
+        value = str(index + 1)
+        if m_Mesh.m_UV0 and m_Mesh.m_Normals:
+            return f"{value}/{value}/{value}"
+        if m_Mesh.m_UV0:
+            return f"{value}/{value}"
+        if m_Mesh.m_Normals:
+            return f"{value}//{value}"
+        return value
+
     for i in range(len(m_Mesh.m_SubMeshes)):
         sb.append(f"g {m_Mesh.name}_{i}\r\n")
         if material_names and i < len(material_names) and material_names[i]:
@@ -74,10 +84,10 @@ def export_mesh_obj(m_Mesh, material_names: list = None):
         end = sum + indexCount // 3
         for f in range(sum, end):
             sb.append(
-                "f {0}/{0}/{0} {1}/{1}/{1} {2}/{2}/{2}\r\n".format(
-                    m_Mesh.m_Indices[f * 3 + 2] + 1,
-                    m_Mesh.m_Indices[f * 3 + 1] + 1,
-                    m_Mesh.m_Indices[f * 3] + 1,
+                "f {0} {1} {2}\r\n".format(
+                    face_vertex(m_Mesh.m_Indices[f * 3 + 2]),
+                    face_vertex(m_Mesh.m_Indices[f * 3 + 1]),
+                    face_vertex(m_Mesh.m_Indices[f * 3]),
                 )
             )
         sum = end

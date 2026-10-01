@@ -515,6 +515,16 @@ class AnimationProjectIndex:
         normalized = list(dict.fromkeys(
             (int(key[0]), int(key[1])) for key in keys
         ))
+        if any(self.object(*key) is not None and self.object(*key).type.name in {
+            "GameObject", "Transform", "RectTransform", "MeshFilter",
+            "MeshRenderer", "SkinnedMeshRenderer", "Animator", "Animation",
+            "AnimatorController", "AnimatorOverrideController",
+        } for key in normalized):
+            # These fields are also materialized in TransformRecord/ModelCandidate,
+            # not only cached TypeTrees. Rebuild from the current in-memory assets
+            # while retaining the shared index object's identity.
+            self.__init__(self.paths, self.environments)
+            return len(normalized)
         for key in normalized:
             self.type_trees.pop(key, None)
         if self.reference_graph is not None:
@@ -2196,7 +2206,15 @@ def replace_animation_from_fbx(
     if target_obj is None or target_obj.type.name != "AnimationClip":
         raise ValueError("The selected Unity object is not an AnimationClip")
     original_path_id = int(target_obj.path_id)
-    tree = deepcopy(project.tree(animation_file_index, animation_path_id))
+    original_raw = target_obj.get_raw_data()
+    from AssetbundleUtils.TypeTreeImport import clone_typetree
+    tree = clone_typetree(project.tree(animation_file_index, animation_path_id))
+    bindings = tree.get("m_ClipBindingConstant", {}).get("genericBindings", [])
+    if tree.get("m_FloatCurves") or tree.get("m_PPtrCurves") or any(
+        int(binding.get("typeID", 4)) != 4 or int(binding.get("attribute", 0)) not in (1, 2, 3)
+        for binding in bindings
+    ):
+        raise ValueError("FBX replacement supports transform-only clips; refusing to discard material/activation/PPtr curves")
     rate = float(sample_rate or tree.get("m_SampleRate") or 30.0)
     rate = min(240.0, max(1.0, rate))
 
@@ -2246,7 +2264,7 @@ def replace_animation_from_fbx(
             if not choices:
                 continue
             if len(choices) > 1:
-                ambiguous_names.append(simple_name)
+                raise ValueError(f"Ambiguous animation node name {simple_name!r}; use unique bone names")
             transform_id = choices[0]
             used_targets.add(transform_id)
             animated_pairs.append((transform_id, node))
@@ -2376,17 +2394,22 @@ def replace_animation_from_fbx(
         target_obj, tree, "m_MuscleClip"
     )
 
-    serialized = target_obj.save_typetree(tree)
-    if int(target_obj.path_id) != original_path_id:
-        raise RuntimeError("Animation PathID changed during serialization")
-    verified = target_obj.read_typetree()
-    verified_dense = verified["m_MuscleClip"]["m_Clip"]["data"]["m_DenseClip"]
-    if (
-        int(verified_dense["m_FrameCount"]) != frame_count
-        or int(verified_dense["m_CurveCount"]) != curve_count
-        or len(verified_dense["m_SampleArray"]) != len(dense_values)
-    ):
-        raise RuntimeError("AnimationClip typetree reload validation failed")
+    try:
+        serialized = target_obj.save_typetree(tree)
+        if int(target_obj.path_id) != original_path_id:
+            raise RuntimeError("Animation PathID changed during serialization")
+        verified = target_obj.read_typetree()
+        verified_dense = verified["m_MuscleClip"]["m_Clip"]["data"]["m_DenseClip"]
+        if (
+            int(verified_dense["m_FrameCount"]) != frame_count
+            or int(verified_dense["m_CurveCount"]) != curve_count
+            or len(verified_dense["m_SampleArray"]) != len(dense_values)
+        ):
+            raise RuntimeError("AnimationClip typetree reload validation failed")
+    except Exception:
+        target_obj.set_raw_data(original_raw)
+        project.type_trees.pop((animation_file_index, animation_path_id), None)
+        raise
     project.type_trees[(animation_file_index, animation_path_id)] = verified
     return {
         "name": str(tree["m_Name"]),

@@ -24,6 +24,7 @@ class ArchiveStorageDecryptor:
         Decrypt a block with SM4. If skip_blockinfo is True, simply return the data as-is
         for encrypted blockInfo sections.
         """
+        data = bytes(data)  # SM4 requires bytes, not zero-copy reader memoryviews.
         if self.skip_blockinfo:
             # Skip encrypted section: return raw data unmodified
             return data
@@ -36,6 +37,7 @@ class ArchiveStorageDecryptor:
 
     def encrypt_block(self, data: bytes) -> bytes:
         """Encrypt complete SM4-CBC blocks and retain Unity's raw suffix."""
+        data = bytes(data)
         if self.skip_blockinfo:
             return data
 

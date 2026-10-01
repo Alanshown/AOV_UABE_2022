@@ -499,6 +499,26 @@ TEXT: Dict[str, Dict[str, str]] = {
     },
 }
 
+# Editable dumps are deliberately distinct from the read-only/truncated display.
+for _code, _strings in {
+    "zh-cn": {"export_dump": "导出可编辑 Dump", "import_dump": "导入 JSON Dump",
+              "import_dump_body": "将导入完整 JSON Dump。目标类型、PathID、Unity 版本及字段结构必须匹配；显示用截断 Dump 不能导入。",
+              "dump_imported": "Dump 已验证并导入。请保存重建 AB。",
+              "mesh_mapping_warning": "部分顶点使用空间近邻映射骨骼和扩展通道；请验证实际姿态。OBJ 不携带新骨架。",
+              "preview_enabled": "启用预览", "preview_disabled": "预览已关闭；Dump 与导入/保存仍可使用。"},
+    "en": {"export_dump": "Export editable Dump", "import_dump": "Import JSON Dump",
+           "import_dump_body": "Import a complete JSON Dump with matching type, PathID, Unity version and fields. Truncated display dumps cannot be imported.",
+           "dump_imported": "Dump validated and imported. Save/Rebuild to write the bundle.",
+           "mesh_mapping_warning": "Some vertices use spatial nearest-neighbour skin/channel transfer; verify their pose. OBJ does not provide a new skeleton.",
+           "preview_enabled": "Enable preview", "preview_disabled": "Preview disabled; Dump, import and Save remain available."},
+    "vn": {"export_dump": "Xuất Dump chỉnh sửa", "import_dump": "Nhập JSON Dump",
+           "import_dump_body": "Nhập JSON Dump đầy đủ, đúng loại, PathID, phiên bản Unity và cấu trúc. Không thể nhập bản xem bị cắt.",
+           "dump_imported": "Đã kiểm tra và nhập Dump. Lưu/dựng lại AB để ghi thay đổi.",
+           "mesh_mapping_warning": "Một số đỉnh dùng ánh xạ gần nhất cho xương/kênh; hãy kiểm tra tư thế. OBJ không chứa bộ xương mới.",
+           "preview_enabled": "Bật xem trước", "preview_disabled": "Đã tắt xem trước; vẫn có thể dùng Dump, nhập và lưu."},
+}.items():
+    TEXT[_code].update(_strings)
+
 
 def normalize(code: str) -> str:
     return code if code in LANGUAGES else "zh-cn"

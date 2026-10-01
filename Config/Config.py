@@ -93,3 +93,23 @@ def reload_config():
     lang_code = load_settings()
     lang = load_language(lang_code)
     return lang, lang_code
+
+
+def get_preview_enabled():
+    try:
+        with open(get_writable_path("Settings.json"), encoding="utf-8") as handle:
+            return bool(json.load(handle).get("PreviewEnabled", True))
+    except (OSError, ValueError):
+        return True
+
+
+def set_preview_enabled(enabled):
+    path = get_writable_path("Settings.json")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            settings = json.load(handle)
+    except (OSError, ValueError):
+        settings = {}
+    settings["PreviewEnabled"] = bool(enabled)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(settings, handle, ensure_ascii=False, indent=4)

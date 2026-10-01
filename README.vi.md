@@ -2,7 +2,7 @@
 # 🎮 UABE cho Arena of Valor (AOV_UABE_2022)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python Version](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
 [![Web Version](https://img.shields.io/badge/🌐_Web_Version-Online-brightgreen.svg)](http://ld.ymkeji.xyz/)
 
@@ -202,3 +202,8 @@ J --> I
     <p style="margin: 16px 0 0; color: #f0f0f0;">Nếu công cụ hữu ích, một ly cà phê là động lực để chúng tôi tiếp tục cập nhật!</p>
   </div>
 </div>
+
+
+## 2026-10
+
+Mã nguồn hiện tại hỗ trợ ánh xạ xương/kênh đỉnh Mesh, cập nhật bounds, JSON Dump chỉnh sửa và tắt xem trước. Cần Python 3.10+ và Tkinter của hệ thống. Xem [báo cáo kiểm tra](docs/issue-audit-2026-10-01.md) và [hướng dẫn](docs/MESH_IMPORT_GUIDE.md). OBJ không chứa bộ xương mới; kiểm thử mã nguồn không thay thế kiểm tra trong game. EXE cũ có thể khác mã nguồn hiện tại.

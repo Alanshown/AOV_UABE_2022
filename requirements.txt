@@ -1,6 +1,6 @@
 lz4==4.3.2
 brotli==1.0.9
-Pillow==9.4.0
+Pillow==10.4.0
 texture2ddecoder==1.0.4
 etcpak==0.9.8
 astc-encoder-py >= 0.1.9
@@ -13,6 +13,7 @@ PyOpenGL==3.1.9
 PyOpenGL_accelerate==3.1.9
 pyopengltk==0.0.4
 tkinterdnd2==0.4.3
-tkinter==8.6
 numpy==2.2.5
 ufbx==0.0.5
+scipy>=1.14,<2
+tabulate>=0.9,<1

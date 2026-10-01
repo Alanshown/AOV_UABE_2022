@@ -5,7 +5,7 @@
 # 🎮 UABE for Arena of Valor
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python Version](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
 [![Web Version](https://img.shields.io/badge/🌐_Web_Version-Online-brightgreen.svg)](ld.ymkeji.xyz)
 
@@ -201,3 +201,13 @@ J --> I
     <p style="margin: 16px 0 0; color: #f0f0f0;">如果本工具对你有帮助，欢迎用一杯咖啡的代价支持一下作者，这份鼓励会让我们继续优化体验！</p>
   </div>
 </div>
+
+
+## 2026-10 Mesh / Dump 维护
+
+当前源码的 Mesh 导入支持未修改 OBJ 往返、骨骼与扩展顶点流映射、bounds 同步、目录 OBJ 重建及保存后校验。新增完整 JSON Dump 导出/导入和可关闭的预览模式。依赖需要 Python 3.10+ 与系统/安装包的 Tkinter；不要通过 pip 安装 tkinter。
+
+- [操作教程](docs/MESH_IMPORT_GUIDE.md)
+- [Issue 审计、调用链和回归/待验收边界](docs/issue-audit-2026-10-01.md)
+
+OBJ 不携带新骨架；空间近邻权重映射需要实际游戏验收。公开旧版 EXE 不等同于当前源码。源码回归通过不代表已在所有游戏版本中验证。

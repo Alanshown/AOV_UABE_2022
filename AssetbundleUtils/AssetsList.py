@@ -12,6 +12,7 @@ import multiprocessing
 import os
 import queue
 import re
+import tempfile
 import threading
 import tkinter as tk
 import unicodedata
@@ -32,7 +33,11 @@ from AssetbundleUtils.BundleProject import (
     export_bundle_project, rebuild_bundle_project,
     repair_sprite_atlas_preloads,
 )
-from AssetbundleUtils.MeshImport import replace_mesh_from_obj
+from AssetbundleUtils.MeshImport import (
+    replace_mesh_from_obj, validate_mesh_payload, synchronize_mesh_renderer_bounds,
+)
+from AssetbundleUtils.TypeTreeImport import export_typetree_dump, import_typetree_dump
+from Config.Config import get_preview_enabled, set_preview_enabled
 from AssetbundleUtils.PreviewWorker import preview_worker
 from AssetbundleUtils.SpriteImport import SpriteProjectIndex, replace_sprite_image
 from AssetbundleUtils.TextureImport import (
@@ -328,13 +333,16 @@ class AssetBrowser:
         self.type_filter: Optional[str] = None
         self.type_counts: Dict[str, int] = {}
         self.modified: Dict[Tuple[int, int], str] = {}
+        self.operation_busy = False
+        self.edit_revision = 0
+        self.preview_enabled = get_preview_enabled()
         self.sprite_preview_overrides: Dict[Tuple[int, int], bytes] = {}
         self.texture_preview_overrides: Dict[Tuple[int, int], bytes] = {}
         self.preview_generation = 0
         self.preview_photo = None
         self.preview_after_job = None
         self.preview_state_key = "preview_select_hint"
-        self.preview_mode = "preview"
+        self.preview_mode = "preview" if self.preview_enabled else "dump"
         self.dump_generation = 0
         self.dump_state_key = "dump_select_hint"
         self.dump_state_values = {}
@@ -371,6 +379,7 @@ class AssetBrowser:
         self.include_model_var = tk.BooleanVar(master=self.window, value=True)
         self.include_attachments_var = tk.BooleanVar(master=self.window, value=True)
         self.preview_attachments_var = tk.BooleanVar(master=self.window, value=True)
+        self.preview_enabled_var = tk.BooleanVar(master=self.window, value=self.preview_enabled)
         self.effect_loop_var = tk.BooleanVar(master=self.window, value=True)
         self.effect_timeline_var = tk.DoubleVar(master=self.window, value=0.0)
         self.window.configure(bg=COLORS["bg_light"])
@@ -386,7 +395,8 @@ class AssetBrowser:
         apply_all_styles()
         self._build_ui()
         self.apply_language(self.lang_code)
-        self._start_preview_processes()
+        if self.preview_enabled:
+            self._start_preview_processes()
         self.event_drain_job = self.window.after(30, self._drain_events)
         self._start_loading()
 
@@ -427,6 +437,12 @@ class AssetBrowser:
             "<FocusOut>", lambda _event: self._set_drawer_toggle_focus(False)
         )
         self._draw_drawer_toggle()
+        self.preview_enabled_check = tk.Checkbutton(
+            header, variable=self.preview_enabled_var, command=self._toggle_preview_enabled,
+            bg=COLORS["surface"], activebackground=COLORS["surface"],
+            font=FONTS["small"], relief="flat", bd=0,
+        )
+        self.preview_enabled_check.pack(side="right", padx=(8, 8))
         self.save_button = RoundedButton(header, "", self.save_bundles, 174, 42, "primary")
         self.save_button.pack(side="right")
         self.save_button.set_enabled(False)
@@ -774,6 +790,7 @@ class AssetBrowser:
         self.buttons = {}
         asset_specs = [
             ("export_raw", self.export_raw), ("import_raw", self.import_raw),
+            ("export_dump", self.export_dump), ("import_dump", self.import_dump),
             ("export_png", self.export_texture), ("import_png", self.import_texture),
             ("import_sprite", self.import_sprite),
             ("export_mesh", self.export_mesh), ("import_mesh", self.import_mesh),
@@ -1038,6 +1055,7 @@ class AssetBrowser:
         self.drawer_assets_var.set(tr("drawer_asset_actions"))
         self.drawer_animation_var.set(tr("drawer_animation_actions"))
         self.drawer_effect_var.set(tr("drawer_effect_actions"))
+        self.preview_enabled_check.configure(text=tr("preview_enabled"))
         self.save_button.set_text(tr("save_rebuild"))
         self.fingerprint_save_button.set_text(tr("fingerprint_rebuild"))
         headings = {
@@ -1051,6 +1069,7 @@ class AssetBrowser:
             self.tree.heading(column, text=text)
         button_keys = {
             "export_raw": "export_raw", "import_raw": "import_raw",
+            "export_dump": "export_dump", "import_dump": "import_dump",
             "export_png": "export_png", "import_png": "import_png",
             "import_sprite": "import_sprite",
             "export_mesh": "export_mesh", "import_mesh": "import_mesh",
@@ -1110,6 +1129,8 @@ class AssetBrowser:
             return
         self.preview_mode = mode
         self.preview_mode_control.set_selected(mode)
+        if mode == "preview" and not self.preview_enabled:
+            self._reset_preview(tr("preview_disabled"), "preview_disabled")
         if mode == "dump":
             # Keep the OpenGL host mapped.  Removing its parent from the Tk
             # geometry manager invalidates the child HWND/context on Windows;
@@ -1160,6 +1181,40 @@ class AssetBrowser:
         if not self.search_var.get().strip():
             self.search_placeholder_active = True
             self.search_var.set(tr("search_placeholder"))
+
+    def _toggle_preview_enabled(self):
+        self.preview_enabled = bool(self.preview_enabled_var.get())
+        set_preview_enabled(self.preview_enabled)
+        self.preview_generation += 1
+        if not self.preview_enabled:
+            self._stop_preview_processes()
+            self._reset_preview(tr("preview_disabled"), "preview_disabled")
+            if self.obj_viewer is not None:
+                self.obj_viewer.destroy()
+                self.obj_viewer = None
+            self._switch_preview_mode("dump")
+        else:
+            self._start_preview_processes()
+            self._switch_preview_mode("preview")
+        row = self.row_lookup.get(self.active_key) if self.active_key else None
+        if row is not None:
+            self._request_preview(row.file_index, row.obj)
+
+    def _stop_preview_processes(self):
+        if self.preview_latest_generation is not None:
+            self.preview_latest_generation.value = int(self.preview_generation)
+        for process in self.preview_processes:
+            if process.is_alive():
+                process.terminate()
+            process.join(timeout=0.5)
+        for channel in list(self.preview_requests or []) + [self.preview_results]:
+            if channel is not None:
+                channel.cancel_join_thread()
+                channel.close()
+        self.preview_processes = []
+        self.preview_requests = None
+        self.preview_results = None
+        self.preview_latest_generation = None
 
     def _start_preview_processes(self):
         try:
@@ -1920,7 +1975,7 @@ class AssetBrowser:
 
     def _update_button_states(self):
         records = self._selected_records()
-        ready = bool(records) and not self.loading
+        ready = bool(records) and not self.loading and not self.operation_busy
         one = len(records) == 1
         asset_type = records[0][1].type.name.lower() if one else ""
         contains_shader = any(obj.type.name == "Shader" for _, obj in records)
@@ -1946,9 +2001,11 @@ class AssetBrowser:
         self.buttons["import_bundle_metadata"].set_enabled(
             ready and one and asset_type == "assetbundle"
         )
-        project_ready = not self.loading and any(self.env_list)
+        self.buttons["export_dump"].set_enabled(ready and one)
+        self.buttons["import_dump"].set_enabled(ready and one and asset_type != "shader")
+        project_ready = not self.loading and not self.operation_busy and any(self.env_list)
         self.buttons["export_bundle_project"].set_enabled(project_ready)
-        self.buttons["rebuild_bundle_project"].set_enabled(not self.loading)
+        self.buttons["rebuild_bundle_project"].set_enabled(not self.loading and not self.operation_busy)
         animation_ready = self.animation_project is not None
         self.buttons["select_animation_model"].set_enabled(
             ready and one and asset_type == "gameobject" and animation_ready
@@ -1972,6 +2029,9 @@ class AssetBrowser:
             self.window.after_cancel(self.preview_after_job)
         self._reset_preview(tr("preview_generating"), "preview_generating")
         self._request_dump(file_index, obj)
+        if not self.preview_enabled:
+            self._reset_preview(tr("preview_disabled"), "preview_disabled")
+            return
         self._resolve_effect_for_asset(
             file_index, int(obj.path_id), obj.type.name
         )
@@ -2056,7 +2116,7 @@ class AssetBrowser:
 
     def _send_preview_request(self, generation, file_index, obj):
         self.preview_after_job = None
-        if generation != self.preview_generation or self.closed:
+        if not self.preview_enabled or generation != self.preview_generation or self.closed:
             return
         alive = [process for process in self.preview_processes if process.is_alive()]
         if (
@@ -2146,6 +2206,16 @@ class AssetBrowser:
                 generation, self.paths[file_index], int(obj.path_id),
                 obj.type.name, replacement_raw,
             )
+        if not isinstance(task, dict):
+            task = {"generation": generation, "bundle_path": self.paths[file_index],
+                    "file_index": file_index, "path_id": int(obj.path_id),
+                    "asset_type": obj.type.name, "replacement_raw": replacement_raw}
+        task["edit_revision"] = self.edit_revision
+        task["serialized_overrides"] = [
+            (index, path_id, bytes(next(target for target in self.env_list[index].objects
+                                      if int(target.path_id) == path_id).get_raw_data()))
+            for index, path_id in list(self.modified)
+        ]
         # Keep heavyweight caches warm on stable workers: skeletal animation
         # uses worker 1, effects use worker 2. Lightweight assets are balanced.
         kind = task.get("kind") if isinstance(task, dict) else str(obj.type.name).lower()
@@ -2181,7 +2251,7 @@ class AssetBrowser:
         self.preview_mode_bar.lift()
 
     def _apply_preview(self, generation, kind, payload, error, worker_id):
-        if generation != self.preview_generation or self.closed:
+        if not self.preview_enabled or generation != self.preview_generation or self.closed:
             return
         if error or kind == "none":
             if error and "missing_dependency:" in error:
@@ -2302,8 +2372,20 @@ class AssetBrowser:
         self._queue_view_rebuild(clear_selection=False)
 
     def _mark_modified(self, file_index: int, obj, label: str):
-        self.modified[(file_index, int(obj.path_id))] = label
-        self._schedule_virtual_render()
+        key = (file_index, int(obj.path_id))
+        self.modified[key] = label
+        self.edit_revision += 1
+        old = getattr(self, "row_lookup", {}).get(key)
+        if old is not None:
+            raw_name = obj.peek_name(old.name)
+            name = _display_asset_text(raw_name)
+            updated = old._replace(name=name, byte_size=int(obj.byte_size),
+                                  search_text=f"{old.basename}\n{name}\n{raw_name}\n{old.asset_type}\n{old.path_id}".casefold())
+            self.row_lookup[key] = updated
+            self.all_rows = [updated if row.key == key else row for row in self.all_rows]
+            self._queue_view_rebuild(clear_selection=False)
+        else:
+            self._schedule_virtual_render()
 
     def _refresh_relationships_after_import(self, file_index: int, obj):
         """Refresh the shared graph after a serialized payload changes."""
@@ -2315,6 +2397,10 @@ class AssetBrowser:
         project.refresh_serialized_objects([
             (int(file_index), int(obj.path_id))
         ])
+        if self.animation_model is not None:
+            self.animation_model = project.find_model(
+                self.animation_model.file_index, self.animation_model.game_object_id
+            )
         if (
             self.effect_project is not None
             and self.effect_project.project is project
@@ -2322,6 +2408,12 @@ class AssetBrowser:
             self.effect_project.rebuild()
 
     def _submit_operation(self, operation_key, worker, on_success=None):
+        if self.operation_busy:
+            return
+        self.operation_busy = True
+        self._update_button_states()
+        self.save_button.set_enabled(False)
+        self.fingerprint_save_button.set_enabled(False)
         self._set_status(operation_key)
         self.progress.pack(side="right")
         self.progress.start(12)
@@ -2338,16 +2430,73 @@ class AssetBrowser:
     def _operation_done(self, operation_key, value, on_success):
         self.progress.stop()
         self.progress.pack_forget()
-        if on_success:
-            on_success(value)
-        self._set_status("operation_done", operation_key=operation_key)
+        try:
+            if on_success:
+                on_success(value)
+            self._set_status("operation_done", operation_key=operation_key)
+        except Exception as exc:
+            self._operation_error(operation_key, str(exc))
+        finally:
+            self._finish_operation()
+
+    def _finish_operation(self):
+        self.operation_busy = False
+        self._update_button_states()
+        self.save_button.set_enabled(any(self.env_list) and not self.loading)
+        self.fingerprint_save_button.set_enabled(any(self.env_list) and not self.loading)
 
     def _operation_error(self, operation_key, error):
+        self._finish_operation()
         self.progress.stop()
         self.progress.pack_forget()
         message = tr("operation_failed", label=tr(operation_key))
         self._set_status("operation_failed", operation_key=operation_key)
         show_dialog(self.window, message, error, "error")
+
+    def export_dump(self):
+        records = self._selected_records()
+        if len(records) != 1:
+            return
+        file_index, obj = records[0]
+        path = asksavefile(self.window, tr("export_dump"), [("JSON Dump", ("*.json",))],
+                           os.path.dirname(self.paths[file_index]),
+                           f"{_safe_filename(obj.peek_name(str(obj.path_id)))}_{obj.path_id}.dump.json", ".json")
+        if path:
+            self._submit_operation("export_dump", lambda: export_typetree_dump(obj, path),
+                                   lambda _: show_dialog(self.window, tr("export_done"), path))
+
+    def import_dump(self):
+        records = self._selected_records()
+        if len(records) != 1 or records[0][1].type.name == "Shader":
+            return
+        path = askopenfile(self.window, tr("import_dump"), [("JSON Dump", ("*.json",))])
+        if not path or not show_dialog(self.window, tr("import_dump"), tr("import_dump_body"), confirm=True):
+            return
+        file_index, obj = records[0]
+
+        def worker():
+            original = obj.get_raw_data()
+            changed_renderers = []
+            try:
+                import_typetree_dump(obj, path)
+                if obj.type.name == "Mesh":
+                    changed_renderers = synchronize_mesh_renderer_bounds(self.env_list, obj)
+                self._refresh_relationships_after_import(file_index, obj)
+                return changed_renderers
+            except Exception:
+                obj.set_raw_data(original)
+                for _, renderer, raw in changed_renderers:
+                    renderer.set_raw_data(raw)
+                raise
+
+        def success(renderers):
+            self._mark_modified(file_index, obj, "Dump")
+            for index, renderer, _ in renderers:
+                self._mark_modified(index, renderer, "Bounds")
+            self._request_preview(file_index, obj)
+            show_dialog(self.window, tr("import_done"), tr("dump_imported"))
+
+        self._submit_operation("import_dump", worker, success)
 
     def export_raw(self):
         records = self._selected_records()
@@ -2383,10 +2532,17 @@ class AssetBrowser:
         file_index, obj = records[0]
 
         def worker():
-            with open(path, "rb") as handle:
-                obj.set_raw_data(handle.read())
-            self._refresh_relationships_after_import(file_index, obj)
-            return file_index, obj
+            original = obj.get_raw_data()
+            try:
+                with open(path, "rb") as handle:
+                    obj.set_raw_data(handle.read())
+                if obj.type.name == "Mesh":
+                    validate_mesh_payload(obj)
+                self._refresh_relationships_after_import(file_index, obj)
+                return file_index, obj
+            except Exception:
+                obj.set_raw_data(original)
+                raise
 
         def success(value):
             self._mark_modified(*value, "Raw")
@@ -2592,11 +2748,25 @@ class AssetBrowser:
         file_index, obj = records[0]
 
         def worker():
-            return file_index, obj, replace_mesh_from_obj(obj, path)
+            original = obj.get_raw_data()
+            changed_renderers = []
+            try:
+                result = replace_mesh_from_obj(obj, path)
+                changed_renderers = synchronize_mesh_renderer_bounds(self.env_list, obj)
+                return file_index, obj, result, changed_renderers
+            except Exception:
+                obj.set_raw_data(original)
+                for _, renderer, raw in changed_renderers:
+                    renderer.set_raw_data(raw)
+                raise
 
         def success(value):
-            index, target, result = value
+            index, target, result, renderers = value
             self._mark_modified(index, target, "Mesh")
+            for renderer_index, renderer, _ in renderers:
+                self._mark_modified(renderer_index, renderer, "Bounds")
+                self._refresh_relationships_after_import(renderer_index, renderer)
+            self._refresh_relationships_after_import(index, target)
             self._request_preview(index, target)
             mode = "mode_preserved" if result.preserved_vertex_streams else (
                 "mode_skin" if result.remapped_skin_weights else "mode_rebuilt"
@@ -2605,6 +2775,8 @@ class AssetBrowser:
                 "mesh_result", name=result.mesh_name, vertices=result.vertex_count,
                 indices=result.index_count, submeshes=result.submesh_count, mode=tr(mode)
             )
+            if result.approximate_mapping:
+                details += "\n" + tr("mesh_mapping_warning")
             if result.cleared_blend_shapes or result.cleared_collision_data:
                 details += tr("cleared_incompatible")
             show_dialog(self.window, tr("mesh_replace_done"), details)
@@ -2712,7 +2884,7 @@ class AssetBrowser:
         self._submit_operation("import_bundle_metadata", worker, success)
 
     def export_bundle_projects(self):
-        if self.loading or not any(self.env_list):
+        if self.loading or self.operation_busy or not any(self.env_list):
             return
         output = askdirectory(
             self.window,
@@ -2729,7 +2901,9 @@ class AssetBrowser:
                     continue
                 results.append(
                     export_bundle_project(
-                        self.paths[index], output, export_decoded=True
+                        self.paths[index], output, export_decoded=True,
+                        source_bytes=(environment.file.save(_select_rebuild_packer(environment.file))
+                                      if any(file_index == index for file_index, _ in self.modified) else None),
                     )
                 )
             return results
@@ -2918,6 +3092,7 @@ class AssetBrowser:
         def success(value):
             index, target, info = value
             self._mark_modified(index, target, "Animation")
+            self._refresh_relationships_after_import(index, target)
             self._request_preview(index, target)
             show_dialog(
                 self.window, tr("animation_replaced_title"),
@@ -2937,7 +3112,7 @@ class AssetBrowser:
         self._save_bundles_with_packer("aov-fingerprint-3", fingerprint=True)
 
     def _save_bundles_with_packer(self, packer, fingerprint=False):
-        if self.loading or not any(self.env_list):
+        if self.loading or self.operation_busy or not any(self.env_list):
             return
         output = askdirectory(
             self.window, tr("pick_ab_output"),
@@ -2950,6 +3125,8 @@ class AssetBrowser:
             confirm=True,
         ):
             return
+        self.operation_busy = True
+        self._update_button_states()
         self.save_button.set_enabled(False)
         self.fingerprint_save_button.set_enabled(False)
         self._set_status(
@@ -2982,6 +3159,8 @@ class AssetBrowser:
                 if file_index == index
             }
             current_objects = {int(obj.path_id): obj for obj in env.objects}
+            expected_payloads = {path_id: hashlib.sha256(current_objects[path_id].get_raw_data()).hexdigest()
+                                 for path_id in expected_modified}
             texture_expectations = {}
             for path_id, current in current_objects.items():
                 if current.type.name != "Texture2D":
@@ -2995,9 +3174,7 @@ class AssetBrowser:
                 }
             data = source_bundle.save(selected_packer)
             target = os.path.join(output, os.path.basename(self.paths[index]))
-            with open(target, "wb") as handle:
-                handle.write(data)
-            reloaded = UnityPy_AOV.load(target)
+            reloaded = UnityPy_AOV.load(data)
             reloaded_map = {int(obj.path_id): obj for obj in reloaded.objects}
             reloaded_inventory = {
                 (int(obj.path_id), obj.type.name) for obj in reloaded.objects
@@ -3053,11 +3230,14 @@ class AssetBrowser:
                     )
             for path_id in expected_modified:
                 checked = reloaded_map[path_id]
+                if hashlib.sha256(checked.get_raw_data()).hexdigest() != expected_payloads[path_id]:
+                    raise ValueError(f"Asset {path_id} payload changed after save")
                 if checked.type.name == "Mesh":
+                    validate_mesh_payload(checked)
                     parsed = checked.read(False)
                     if parsed.m_VertexCount <= 0 or not parsed.m_Indices or not parsed.export():
                         raise ValueError(f"Mesh {path_id} reload validation failed")
-                elif checked.type.name == "AnimationClip":
+                elif checked.type.name == "AnimationClip" and self.modified.get((index, path_id)) == "Animation":
                     tree = checked.read_typetree()
                     dense = tree["m_MuscleClip"]["m_Clip"]["data"]["m_DenseClip"]
                     frame_count = int(dense["m_FrameCount"])
@@ -3073,6 +3253,15 @@ class AssetBrowser:
                     continue
                 else:
                     checked.read(False)
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=output, prefix=".aov-", delete=False) as handle:
+                    temporary = handle.name
+                    handle.write(data)
+                os.replace(temporary, target)
+            finally:
+                if temporary and os.path.exists(temporary):
+                    os.unlink(temporary)
             return target
 
         def worker():
@@ -3095,6 +3284,7 @@ class AssetBrowser:
         )
 
     def _save_done(self, targets, error, fingerprint=False):
+        self._finish_operation()
         self.progress.stop()
         self.progress.pack_forget()
         self.save_button.set_enabled(True)
@@ -3171,7 +3361,7 @@ class AssetBrowser:
             "include_model_var", "include_attachments_var",
             "preview_attachments_var", "preview_model_text_var",
             "preview_attachment_text_var",
-            "effect_loop_var", "effect_timeline_var", "effect_time_var",
+            "preview_enabled_var", "effect_loop_var", "effect_timeline_var", "effect_time_var",
             "workspace_title_var", "subtitle_var", "search_var",
             "asset_count_var", "selection_title", "selection_meta",
             "status_var", "drawer_title_var", "drawer_hint_var",

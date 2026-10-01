@@ -10,12 +10,14 @@ import os
 import re
 import shutil
 import struct
+import tempfile
 import unicodedata
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from PIL import Image
 
 from AssetbundleUtils import UnityPy_AOV
+from AssetbundleUtils.MeshImport import replace_mesh_from_obj, validate_mesh_payload, synchronize_mesh_renderer_bounds
 from AssetbundleUtils.TextureImport import (
     optimize_texture_runtime_storage,
     replace_texture_image,
@@ -614,6 +616,7 @@ def export_bundle_project(
     output_root: str,
     *,
     export_decoded: bool = True,
+    source_bytes: Optional[bytes] = None,
 ) -> Dict[str, object]:
     """Export every object raw plus decoded supported assets and relationship JSON."""
 
@@ -628,8 +631,11 @@ def export_bundle_project(
     os.makedirs(assets_root)
 
     backup_path = os.path.join(backup_dir, os.path.basename(source_path))
-    shutil.copy2(source_path, backup_path)
-    environment = UnityPy_AOV.load(source_path)
+    if source_bytes is None:
+        shutil.copy2(source_path, backup_path)
+    else:
+        _write_bytes(backup_path, source_bytes)
+    environment = UnityPy_AOV.load(backup_path)
     bundle = environment.file
 
     nodes = []
@@ -704,8 +710,8 @@ def export_bundle_project(
         "source": {
             "path": source_path,
             "file_name": os.path.basename(source_path),
-            "bytes": os.path.getsize(source_path),
-            "sha256": _sha256(open(source_path, "rb").read()),
+            "bytes": os.path.getsize(backup_path),
+            "sha256": _sha256(open(backup_path, "rb").read()),
             "backup": _relative(backup_path, project_dir),
             # Kept as a compatibility alias for older GUI builds and scripts.
             "template": _relative(backup_path, project_dir),
@@ -1109,6 +1115,7 @@ def _apply_legacy_project_objects(environment, project_dir: str, manifest: dict)
 
     edited_images = []
     edited_typetrees = []
+    edited_meshes = []
     for item in manifest["assets"]:
         key = (int(item["path_id"]), item["type"])
         obj = lookup[key]
@@ -1126,6 +1133,10 @@ def _apply_legacy_project_objects(environment, project_dir: str, manifest: dict)
             current_hash = _sha256(open(editable_path, "rb").read())
             if current_hash != item.get("editable_sha256"):
                 edited_images.append((obj, editable_path))
+        elif editable and item["type"] == "Mesh" and editable.lower().endswith(".obj"):
+            editable_path = os.path.join(project_dir, *editable.split("/"))
+            if _sha256(open(editable_path, "rb").read()) != item.get("editable_sha256"):
+                edited_meshes.append((obj, editable_path))
         elif editable and editable.lower().endswith(".json"):
             editable_path = os.path.join(project_dir, *editable.split("/"))
             current_hash = _sha256(open(editable_path, "rb").read())
@@ -1138,6 +1149,9 @@ def _apply_legacy_project_objects(environment, project_dir: str, manifest: dict)
         texture = obj.read(False)
         replace_texture_image(texture, image)
         texture.save()
+    for obj, editable_path in edited_meshes:
+        replace_mesh_from_obj(obj, editable_path)
+        synchronize_mesh_renderer_bounds([environment], obj)
     for obj, editable_path in edited_typetrees:
         with open(editable_path, "r", encoding="utf-8-sig") as handle:
             tree = json.load(handle)
@@ -1145,6 +1159,8 @@ def _apply_legacy_project_objects(environment, project_dir: str, manifest: dict)
     return {
         "textures": len(edited_images),
         "typetrees": len(edited_typetrees),
+        "meshes": len(edited_meshes),
+        "mesh_path_ids": [int(obj.path_id) for obj, _ in edited_meshes],
         "added": [],
         "deleted": [],
         "renamed": [],
@@ -2488,6 +2504,7 @@ def _apply_dynamic_project_objects(
 
     edited_images = []
     edited_typetrees = []
+    edited_meshes = []
     for item in scan["items"]:
         editable = item.get("editable")
         if not editable:
@@ -2500,6 +2517,8 @@ def _apply_dynamic_project_objects(
         obj = current[(item["type"], int(item["path_id"]))]
         if item["type"] == "Texture2D" and editable.lower().endswith(".png"):
             edited_images.append((obj, editable_path, item))
+        elif item["type"] == "Mesh" and editable.lower().endswith(".obj"):
+            edited_meshes.append((obj, editable_path))
         elif editable.lower().endswith(".json"):
             edited_typetrees.append((obj, editable_path))
 
@@ -2535,6 +2554,9 @@ def _apply_dynamic_project_objects(
                     "payload_sha256": _sha256(payload),
                 }
             )
+    for obj, editable_path in edited_meshes:
+        replace_mesh_from_obj(obj, editable_path)
+        synchronize_mesh_renderer_bounds([environment], obj)
     for obj, editable_path in edited_typetrees:
         with open(editable_path, "r", encoding="utf-8-sig") as handle:
             tree = json.load(handle)
@@ -2564,6 +2586,8 @@ def _apply_dynamic_project_objects(
     return {
         "textures": len(edited_images),
         "typetrees": len(edited_typetrees),
+        "meshes": len(edited_meshes),
+        "mesh_path_ids": [int(obj.path_id) for obj, _ in edited_meshes],
         "added": scan["added"],
         "deleted": scan["deleted"],
         "renamed": scan["renamed"],
@@ -3201,11 +3225,19 @@ def rebuild_bundle_project(
         if packer == "auto"
         else packer
     )
+    mesh_expectations = {}
+    changed_mesh_ids = set(edited.get("mesh_path_ids", []))
+    changed_mesh_ids.update(int(item["path_id"]) for item in edited.get("modified_raw", [])
+                            if item.get("type") == "Mesh")
+    changed_mesh_ids.update(int(item["path_id"]) for item in edited.get("added", [])
+                            if item.get("type") == "Mesh")
+    for obj in environment.objects:
+        if obj.type.name == "Mesh" and int(obj.path_id) in changed_mesh_ids:
+            validate_mesh_payload(obj)
+            mesh_expectations[int(obj.path_id)] = _sha256(obj.get_raw_data())
     data = bundle.save(selected_packer)
     output_path = os.path.abspath(output_path)
-    _write_bytes(output_path, data)
-
-    verified = UnityPy_AOV.load(output_path)
+    verified = UnityPy_AOV.load(data)
     expected_inventory = {
         (int(item["path_id"]), item["type"]) for item in edited["assets"]
     }
@@ -3217,6 +3249,11 @@ def rebuild_bundle_project(
     verified_objects = {
         int(obj.path_id): obj for obj in verified.objects
     }
+    for path_id, expected_hash in mesh_expectations.items():
+        obj = verified_objects.get(path_id)
+        if obj is None or _sha256(obj.get_raw_data()) != expected_hash:
+            raise ValueError(f"Mesh {path_id} payload changed during bundle rebuild")
+        validate_mesh_payload(obj)
     for path_id, expectation in texture_expectations.items():
         obj = verified_objects.get(path_id)
         if obj is None or obj.type.name != "Texture2D":
@@ -3258,6 +3295,16 @@ def rebuild_bundle_project(
                 verified_stream_issues[:8], ensure_ascii=False
             )
         )
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=os.path.dirname(output_path), prefix=".aov-", delete=False) as handle:
+            temporary = handle.name
+            handle.write(data)
+        os.replace(temporary, output_path)
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
     if manifest.get("$schema") != SCHEMA_V1:
         _refresh_project_manifest(
             project_dir, manifest, verified, edited
@@ -3269,6 +3316,7 @@ def rebuild_bundle_project(
         "assets": len(actual_inventory),
         "edited_textures": edited["textures"],
         "edited_typetrees": edited["typetrees"],
+        "edited_meshes": edited["meshes"],
         "added_assets": edited["added"],
         "deleted_assets": edited["deleted"],
         "renamed_assets": edited["renamed"],
