@@ -4,7 +4,7 @@ import mmap
 import os
 import re
 import tempfile
-from typing import Tuple
+from typing import Optional, Tuple
 from Crypto.Cipher import AES
 from . import File
 from ..enums import ArchiveFlags, ArchiveFlagsOld, CompressionFlags
@@ -114,20 +114,7 @@ class BundleFile(File.File):
 
         self.dataflags = reader.read_u_int()
 
-        version = self.get_version_tuple()
-        # https://issuetracker.unity3d.com/issues/files-within-assetbundles-do-not-start-on-aligned-boundaries-breaking-patching-on-nintendo-switch
-        # Unity CN introduced encryption before the alignment fix was introduced.
-        # Unity CN used the same flag for the encryption as later on the alignment fix,
-        # so we have to check the version to determine the correct flag set.
-        if (
-            version < (2020,)
-            or (version[0] == 2020 and version < (2020, 3, 34))
-            or (version[0] == 2021 and version < (2021, 3, 2))
-            or (version[0] == 2022 and version < (2022, 1, 1))
-        ):
-            self.dataflags = ArchiveFlagsOld(self.dataflags)
-        else:
-            self.dataflags = ArchiveFlags(self.dataflags)
+        self.dataflags = self.get_archive_flags(self.dataflags)
 
         if self.version >= 7:
             reader.align_stream(16)
@@ -385,7 +372,7 @@ class BundleFile(File.File):
             allowed strings:
                 none - no compression, default, safest bet
                 lz4 - lz4 compression
-                original - uses the original flags
+                original - preserves original compression and encryption flags
                 aov-fingerprint-2 - SM4 prefix BlocksInfo + LZ4HC (0x643)
                 aov-fingerprint-3 - SM4 prefix BlocksInfo + LZMA (0x641)
                 aov-fingerprint-1 - SM4 EOF BlocksInfo + LZMA (0x6C1)
@@ -459,10 +446,29 @@ class BundleFile(File.File):
         data_flag: int,
         block_info_flag: int,
         *,
-        encrypt_header: bool = False,
-        encrypt_blocks_info: bool = False,
+        encrypt_header: Optional[bool] = None,
+        encrypt_blocks_info: Optional[bool] = None,
         single_data_block: bool = False,
     ):
+        # Interpret flags with the same Unity-version rules as the reader.
+        # In particular, 0x200 is encryption in old Unity and padding in new
+        # Unity. Original/tuple saves must encrypt the bytes they label as such.
+        data_flag = self.get_archive_flags(data_flag)
+        encrypted = bool(data_flag & data_flag.UsesAssetBundleEncryption)
+        if encrypt_header is None:
+            encrypt_header = encrypted
+        if encrypt_blocks_info is None:
+            encrypt_blocks_info = encrypted
+        if encrypt_header != encrypted or encrypt_blocks_info != encrypted:
+            raise ValueError("UnityFS encryption options must match the archive flags")
+        needs_padding = (
+            isinstance(data_flag, ArchiveFlags)
+            and bool(data_flag & ArchiveFlags.BlockInfoNeedPaddingAtStart)
+        )
+        encryptor = (
+            ArchiveStorageManager.ArchiveStorageDecryptor() if encrypted else None
+        )
+
         # header
         # compressed blockinfo (block details & directionary)
         # compressed assets
@@ -542,6 +548,10 @@ class BundleFile(File.File):
                 raise NotImplementedError
             else:
                 compressed_chunk = chunk
+            # The reader also supports protected LZ4 data blocks. Preserve
+            # their per-block encryption flag only with actual ciphertext.
+            if encrypted and block_info_flag & 0x200 and switch in (2, 3):
+                compressed_chunk = encryptor.encrypt_block(compressed_chunk)
             block_records.append(
                 (block_info_flag, len(compressed_chunk), len(chunk))
             )
@@ -605,9 +615,7 @@ class BundleFile(File.File):
         compressed_block_data_size = len(block_data)
 
         if encrypt_blocks_info:
-            block_data = ArchiveStorageManager.ArchiveStorageDecryptor().encrypt_block(
-                block_data
-            )
+            block_data = encryptor.encrypt_block(block_data)
 
         # write the header info
         ## file size - 0 for now, will be set at the end
@@ -632,13 +640,13 @@ class BundleFile(File.File):
             writer.align_stream(16)
 
         if data_flag & 0x80:  # at end of file
-            if data_flag & 0x200:
+            if needs_padding:
                 writer.align_stream(16)
             writer.write(file_data)
             writer.write(block_data)
         else:
             writer.write(block_data)
-            if data_flag & 0x200:
+            if needs_padding:
                 writer.align_stream(16)
             writer.write(file_data)
 
@@ -715,6 +723,23 @@ class BundleFile(File.File):
             raise NotImplementedError("LZHAM decompression not implemented")
         else:
             return compressed_data
+
+    def get_archive_flags(self, flags):
+        """Decode archive flags consistently for both reading and writing."""
+        version = self.get_version_tuple()
+        # https://issuetracker.unity3d.com/issues/files-within-assetbundles-do-not-start-on-aligned-boundaries-breaking-patching-on-nintendo-switch
+        # Unity CN introduced encryption before the alignment fix was introduced.
+        # Unity CN used the same flag for the encryption as later on the alignment fix,
+        # so we have to check the version to determine the correct flag set.
+        if (
+            version < (2020,)
+            or (version[0] == 2020 and version < (2020, 3, 34))
+            or (version[0] == 2021 and version < (2021, 3, 2))
+            or (version[0] == 2022 and version < (2022, 1, 1))
+        ):
+            return ArchiveFlagsOld(flags)
+        else:
+            return ArchiveFlags(flags)
 
     def get_version_tuple(self) -> Tuple[int, int, int]:
         """Returns the version as a tuple."""
