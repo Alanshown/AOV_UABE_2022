@@ -54,6 +54,7 @@ TYPE_DIRECTORIES = {
     "Material": "material",
     "Shader": "shader",
     "AnimationClip": "animation",
+    "Animation": "animation_component",
     "AudioClip": "audio",
     "MonoBehaviour": "monobehaviour",
     "ParticleSystem": "particlesystem",
@@ -637,6 +638,7 @@ def export_bundle_project(
         _write_bytes(backup_path, source_bytes)
     environment = UnityPy_AOV.load(backup_path)
     bundle = environment.file
+    recover_unambiguous_texture_streams(environment)
 
     nodes = []
     for name, node in bundle.files.items():
@@ -1281,6 +1283,16 @@ def _scan_project_assets(project_dir: str, manifest: dict) -> dict:
             "backup_assets", manifest.get("assets", [])
         )
     }
+    # Older exports put both Animation and AnimationClip in assets/animation.
+    # A known PathID and its recorded directory are stronger than a directory
+    # default; new objects still use the explicit type directory.
+    recorded_dirs = {}
+    for item in (*backup_records.values(), *current_records.values()):
+        parts = item["raw"].replace("\\", "/").split("/")
+        if len(parts) >= 3 and parts[0] == "assets":
+            recorded_dirs.setdefault((parts[1], int(item["path_id"])), set()).add(
+                item["type"]
+            )
     scanned = {}
     ids = {}
     for directory_entry in sorted(
@@ -1289,7 +1301,7 @@ def _scan_project_assets(project_dir: str, manifest: dict) -> dict:
         if not directory_entry.is_dir():
             continue
         directory_name = directory_entry.name
-        type_name = DIRECTORY_TYPES.get(directory_name)
+        directory_type = DIRECTORY_TYPES.get(directory_name)
         known = {
             item["type"]
             for item in manifest.get("assets", [])
@@ -1299,9 +1311,9 @@ def _scan_project_assets(project_dir: str, manifest: dict) -> dict:
         }
         if len(known) == 1:
             manifest_type = next(iter(known))
-            if type_name is None or type_name not in known:
-                type_name = manifest_type
-        if type_name is None:
+            if directory_type is None or directory_type not in known:
+                directory_type = manifest_type
+        if directory_type is None:
             raise ValueError(
                 f"Cannot infer Unity type for assets/{directory_name}"
             )
@@ -1331,6 +1343,13 @@ def _scan_project_assets(project_dir: str, manifest: dict) -> dict:
                     continue
                 stem = os.path.splitext(file_name)[0]
                 parsed_name, path_id = _parse_asset_file_stem(stem)
+                recorded = recorded_dirs.get((directory_name, path_id), ())
+                if len(recorded) > 1:
+                    raise ValueError(
+                        f"Conflicting manifest types for PathID {path_id} "
+                        f"in assets/{directory_name}: {', '.join(sorted(recorded))}"
+                    )
+                type_name = next(iter(recorded), directory_type)
                 key = (type_name, path_id)
                 if key in scanned:
                     raise ValueError(
@@ -2645,6 +2664,10 @@ def _patch_stream_descriptor(
 ) -> None:
     """Patch only the stream locator inside an object's serialized bytes."""
 
+    obj.set_raw_data(_replace_stream_locator_bytes(obj, old, new))
+
+
+def _replace_stream_locator_bytes(obj, old: dict, new: dict) -> bytes:
     raw = bytes(obj.get_raw_data())
     old_bytes = _stream_descriptor_bytes(obj, old)
     new_bytes = _stream_descriptor_bytes(obj, new)
@@ -2654,7 +2677,7 @@ def _patch_stream_descriptor(
             f"Cannot safely update {obj.type.name} {obj.path_id} stream "
             f"locator: serialized descriptor matched {count} times"
         )
-    obj.set_raw_data(raw.replace(old_bytes, new_bytes, 1))
+    return raw.replace(old_bytes, new_bytes, 1)
 
 
 def _canonical_resource_name(assets_file, bundle) -> str:
@@ -2669,11 +2692,103 @@ def _canonical_resource_name(assets_file, bundle) -> str:
     return preferred
 
 
+def recover_unambiguous_texture_streams(environment) -> set[int]:
+    """Repair blank Texture2D locators only with corroborating CAB evidence.
+
+    A positive offset/length cannot establish that the serialized-file reader
+    owns the payload. Require a real canonical resource in the same bundle, a
+    named texture proving that CAB's binding, and a nonoverlapping bounded slice.
+    """
+    pending = {}
+    named_slices = {}
+    for obj in environment.objects:
+        if obj.type.name != "Texture2D":
+            continue
+        texture = obj.read(False)
+        stream = getattr(texture, "m_StreamData", None)
+        if stream is None or int(stream.size) <= 0:
+            continue
+        assets_file = obj.assets_file
+        if getattr(texture, "_image_data", b""):
+            continue
+        path = str(stream.path or "")
+        start, size = int(stream.offset), int(stream.size)
+        end = start + size
+        if not path:
+            pending.setdefault(assets_file, []).append(
+                (obj, start, end, size, int(texture.m_CompleteImageSize))
+            )
+        else:
+            named_slices.setdefault(assets_file, []).append((path, start, end))
+    if not pending:
+        return set()
+
+    bundle = environment.file
+    repairs = []
+    for assets_file, entries in pending.items():
+        owner = str(assets_file.name or "")
+        basename = f"{owner}.resS"
+        path = f"archive:/{owner}/{basename}"
+        candidates = [
+            (key, node)
+            for key, node in bundle.files.items()
+            if key.casefold() in {basename.casefold(), f"{owner}.resource".casefold(),
+                                  f"{owner}.assets.resS".casefold()}
+        ]
+        named_peers = [
+            (left, right)
+            for loc, left, right in named_slices.get(assets_file, [])
+            if loc == path
+        ]
+        resource = (
+            candidates[0][1]
+            if len(candidates) == 1 and candidates[0][0] == basename
+            else None
+        )
+        length = getattr(resource, "Length", 0)
+        for obj, start, end, size, complete_size in entries:
+            prev_end = max((r for _, r in named_peers if r <= start), default=0)
+            next_start = min((l for l, _ in named_peers if l >= end), default=length)
+            if (
+                getattr(assets_file, "parent", None) is not bundle
+                or not owner
+                or not named_peers
+                or size != complete_size
+                or not (0 <= start < end <= length)
+                # Require one gap, allowing at most a UnityFS alignment pad
+                # on either side, not an arbitrary unused region of the CAB.
+                or start not in {prev_end, (prev_end + 15) & ~15}
+                or next_start not in {end, (end + 15) & ~15}
+                or not all(0 <= left < right <= length for left, right in named_peers)
+                or any(start < right and left < end for left, right in named_peers)
+                or any(other is not obj and start < right and left < end
+                       for other, left, right, _, _ in entries)
+            ):
+                raise ValueError(
+                    f"Texture2D {obj.path_id} has an empty stream path; "
+                    f"cannot safely resolve {size} bytes at offset {start} "
+                    f"in {owner or '<unknown CAB>'}. Supply the original bundle "
+                    "and its resource files."
+                )
+            old = {"kind": "streaming_info", "path": "", "offset": start, "size": size}
+            repairs.append((obj, old, {**old, "path": path}))
+
+    # Validate all descriptor replacements before mutating any objects.
+    updated = [
+        (obj, _replace_stream_locator_bytes(obj, old, new))
+        for obj, old, new in repairs
+    ]
+    for obj, raw in updated:
+        obj.set_raw_data(raw)
+    return {int(obj.path_id) for obj, _ in updated}
+
+
 def _rebuild_stream_resources(
     environment,
     project_dir: str,
     manifest: dict,
     assets: List[dict],
+    recovered_texture_ids: frozenset[int] = frozenset(),
 ) -> dict:
     """Repack per-asset sidecars and bind every stream to the current CAB."""
 
@@ -2707,6 +2822,23 @@ def _rebuild_stream_resources(
                     "but its raw object does not contain an external stream"
                 )
             continue
+        recovered = (
+            not stream and key[0] == "Texture2D" and key[1] in recovered_texture_ids
+        )
+        if recovered:
+            payload = bytes(get_resource_data(
+                descriptor["path"], obj.assets_file,
+                descriptor["offset"], descriptor["size"],
+            ))
+            if len(payload) != descriptor["size"]:
+                raise ValueError(f"Recovered Texture2D {key[1]} payload is truncated")
+            item["stream"] = stream = {
+                **descriptor,
+                "original_path": "",
+                "payload": os.path.splitext(item["raw"])[0] + ".resS",
+                "payload_sha256": _sha256(payload),
+            }
+            item["_recovered_stream_payload"] = True
         if not stream or not stream.get("payload"):
             raise ValueError(
                 f"{item['type']} {item['path_id']} references "
@@ -2715,12 +2847,13 @@ def _rebuild_stream_resources(
         payload_path = os.path.join(
             project_dir, *stream["payload"].split("/")
         )
-        if not os.path.isfile(payload_path):
-            raise ValueError(
-                f"External payload is missing for {item['type']} "
-                f"{item['path_id']}: {payload_path}"
-            )
-        payload = open(payload_path, "rb").read()
+        if not recovered:
+            if not os.path.isfile(payload_path):
+                raise ValueError(
+                    f"External payload is missing for {item['type']} "
+                    f"{item['path_id']}: {payload_path}"
+                )
+            payload = open(payload_path, "rb").read()
         expected_sha = stream.get("payload_sha256")
         if expected_sha and _sha256(payload) != expected_sha:
             # A changed sidecar is an intentional asset edit. The current
@@ -3020,7 +3153,14 @@ def _synchronize_project_files(
         _write_bytes(raw_path, bytes(obj.get_raw_data()))
         descriptor = _stream_descriptor(obj)
         if descriptor is not None and item.get("stream"):
-            item["stream"].update(descriptor)
+            stream = item["stream"]
+            stream.update(descriptor)
+            if item.pop("_recovered_stream_payload", False):
+                payload = get_resource_data(
+                    descriptor["path"], obj.assets_file,
+                    descriptor["offset"], descriptor["size"],
+                )
+                _write_bytes(os.path.join(project_dir, *stream["payload"].split("/")), payload)
 
     nodes_by_name = {
         node["name"]: node for node in manifest.get("nodes", [])
@@ -3137,6 +3277,61 @@ def optimize_sprite_atlas_textures(
     return optimized
 
 
+def _project_snapshot(root: str) -> dict:
+    """Detect concurrent edits and refuse to follow links in a writeback tree."""
+    isjunction = getattr(os.path, "isjunction", lambda p: False)
+    if os.path.islink(root) or isjunction(root):
+        raise OSError(f"Cannot safely refresh a linked project: {root}")
+    snapshot = {}
+    for folder, directories, files in os.walk(root):
+        for name in (*directories, *files):
+            path = os.path.join(folder, name)
+            if os.path.islink(path) or isjunction(path):
+                raise OSError(f"Cannot safely refresh a project containing a link: {path}")
+            st = os.stat(path)
+            snapshot[_relative(path, root)] = (st.st_ino, st.st_mtime_ns, st.st_size)
+    return snapshot
+
+
+def _stage_project_refresh(project_dir: str, manifest: dict, verified, edited: dict) -> str | None:
+    """Return a writeback warning without invalidating the already verified AB."""
+    stage_root = None
+    preserve_backup = False
+    try:
+        baseline = _project_snapshot(project_dir)
+        stage_root = tempfile.mkdtemp(prefix=".aov-project-", dir=os.path.dirname(project_dir))
+        staged = os.path.join(stage_root, "updated")
+        previous = os.path.join(stage_root, "previous")
+        shutil.copytree(project_dir, staged, symlinks=True)
+        _project_snapshot(staged)
+        _refresh_project_manifest(staged, manifest, verified, edited)
+        if _project_snapshot(project_dir) != baseline:
+            raise OSError("The source project changed during refresh; no changes were applied")
+        # From this point onward, never clean up a retained original unless
+        # installation or rollback has definitely succeeded.
+        preserve_backup = True
+        os.replace(project_dir, previous)
+        try:
+            os.replace(staged, project_dir)
+        except BaseException as install_error:
+            try:
+                os.replace(previous, project_dir)
+            except Exception as rollback_error:
+                return (
+                    f"{install_error}; project restoration also failed: {rollback_error}. "
+                    f"Original project directory retained at: {previous}"
+                )
+            preserve_backup = False
+            raise
+        preserve_backup = False
+    except Exception as exc:
+        return str(exc) or type(exc).__name__
+    finally:
+        if stage_root and (not preserve_backup or not os.path.lexists(previous)):
+            shutil.rmtree(stage_root, ignore_errors=True)
+    return None
+
+
 def rebuild_bundle_project(
     project_dir: str,
     output_path: str,
@@ -3152,7 +3347,16 @@ def rebuild_bundle_project(
     """
 
     project_dir = os.path.abspath(project_dir)
+    output_path = os.path.abspath(output_path)
     manifest = _load_manifest(project_dir)
+    project_root = os.path.normcase(os.path.realpath(project_dir))
+    output_real = os.path.normcase(os.path.realpath(output_path))
+    try:
+        output_is_internal = os.path.commonpath((project_root, output_real)) == project_root
+    except ValueError:  # Windows paths on different volumes.
+        output_is_internal = False
+    if output_is_internal:
+        raise ValueError("Choose an output AB outside the exported project directory")
     backup = os.path.join(
         project_dir, *manifest["source"]["backup"].split("/")
     )
@@ -3167,9 +3371,11 @@ def rebuild_bundle_project(
     edited = _apply_project_objects(
         environment, project_dir, manifest
     )
+    recovered_texture_ids = recover_unambiguous_texture_streams(environment)
     stream_sync = (
         _rebuild_stream_resources(
-            environment, project_dir, manifest, edited["assets"]
+            environment, project_dir, manifest, edited["assets"],
+            frozenset(recovered_texture_ids),
         )
         if manifest.get("$schema") != SCHEMA_V1
         else {"active_stream_assets": 0, "resources": [], "issues": []}
@@ -3305,12 +3511,15 @@ def rebuild_bundle_project(
     finally:
         if temporary and os.path.exists(temporary):
             os.unlink(temporary)
+    project_sync_warning = None
+    project_sync_status = "not_required"
     if manifest.get("$schema") != SCHEMA_V1:
-        _refresh_project_manifest(
-            project_dir, manifest, verified, edited
-        )
+        project_sync_warning = _stage_project_refresh(project_dir, manifest, verified, edited)
+        project_sync_status = "warning" if project_sync_warning else "updated"
     return {
         "path": output_path,
+        "project_sync_status": project_sync_status,
+        "project_sync_warning": project_sync_warning,
         "bytes": len(data),
         "packer": selected_packer,
         "assets": len(actual_inventory),

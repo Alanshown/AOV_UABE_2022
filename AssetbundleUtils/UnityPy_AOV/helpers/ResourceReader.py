@@ -1,76 +1,109 @@
-import os, glob
-from ..streams import EndianBinaryReader
+"""Read Unity resource slices without substituting unrelated serialized data."""
+
+import os
 from ..files import File
+from ..streams import EndianBinaryReader
 
 
 def get_resource_data(*args):
-    """
-    Input:
-    Option 1:
-        0 - path - file path
-        1 - assets_file - SerializedFile
-        2 - offset -
-        3 - size -
-    Option 2:
-        0 - reader - EndianBinaryReader
-        1 - offset -
-        2 - size -
-
-    -> -2 = offset, -1 = size
-    """
+    """Read a bounded slice from a named resource or an explicit reader."""
+    owned = False
     if len(args) == 4:
-        reader = search_resource(res_path=args[0], assets_file=args[1])
+        reader, owned = _find_resource(args[0], args[1])
     elif len(args) == 3:
         reader = args[0]
     else:
         raise TypeError(f"3 or 4 arguments required, but only {len(args)} given")
 
-    reader.Position = args[-2]
-    return reader.read_bytes(args[-1])
+    try:
+        offset, size = int(args[-2]), int(args[-1])
+        length = reader.Length
+        if offset < 0 or size < 0 or offset + size > length:
+            label = args[0] if len(args) == 4 else "<reader>"
+            raise ValueError(
+                f"Resource {label!r} slice [{offset}, {offset + size}) "
+                f"exceeds {length} available bytes"
+            )
+        # Streamable readers report the underlying absolute file position but
+        # interpret assignments relative to BaseOffset.
+        position = reader.Position
+        restore_position = position - reader.BaseOffset if hasattr(reader, "stream") else position
+        try:
+            reader.Position = offset
+            data = reader.read_bytes(size)
+            if len(data) != size:
+                raise ValueError(f"Truncated resource: expected {size} bytes, got {len(data)}")
+            return data
+        finally:
+            reader.Position = restore_position
+    finally:
+        if owned:
+            reader.dispose()
 
 
 def search_resource(res_path, assets_file):
-    # try to find the resource in the Unity packages
-    base_name = os.path.basename(res_path)
-    if os.path.splitext(base_name)[1] == ".resource":
-        base_name2 = base_name.replace('.resource', '.assets.resS')
-    else:
-        base_name2 = base_name.replace('.assets.resS', '.resource')
+    """Resolve the named resource. A returned disk reader belongs to the caller."""
+    return _find_resource(res_path, assets_file)[0]
 
-    for p in [res_path, base_name, base_name2]:
-        reader = assets_file.parent.files.get(p)
-        if reader:
+
+def _find_resource(res_path, assets_file):
+    normalized = str(res_path or "").replace("\\", "/")
+    base_name = normalized.rsplit("/", 1)[-1]
+    if base_name in {"", ".", ".."}:
+        raise FileNotFoundError(f"Can't find the resource file {res_path}")
+    if base_name.endswith(".resource"):
+        alias = base_name[:-len(".resource")] + ".assets.resS"
+    elif base_name.endswith(".assets.resS"):
+        alias = base_name[:-len(".assets.resS")] + ".resource"
+    else:
+        alias = base_name
+    names = tuple(dict.fromkeys((base_name, alias)))
+
+    nodes = getattr(getattr(assets_file, "parent", None), "files", None) or {}
+    for key in dict.fromkeys((res_path, normalized, *names)):
+        reader = nodes.get(key)
+        if reader is not None:
             if isinstance(reader, File.File):
-                # in case the import helper accidentally detected a resource file as something else
                 reader = reader.reader
-            return reader
+            return reader, False
 
-    # try to find it in the dir environment
-    c = assets_file
-    path = getattr(assets_file, "path", None)
-    while not path:
-        c = getattr(c,"parent",None)
-        if c == None:
-            raise FileNotFoundError(
-                f"Can't find the resource file {res_path}"
-            )
-        path = getattr(c, "path", None)
-    current_directory = path
-    resource_file_path = os.path.join(current_directory, *res_path.split("/"))
-    if not os.path.isfile(resource_file_path):
-        resource_file_path = search_resource_file(current_directory, base_name)
-    if not os.path.isfile(resource_file_path):
-        resource_file_path = search_resource_file(current_directory, base_name.replace('.assets.resS', '.resource'))
+    container = assets_file
+    while container is not None:
+        current_directory = getattr(container, "path", None)
+        if current_directory and os.path.isdir(current_directory):
+            for name in names:
+                if not normalized.startswith("archive:/"):
+                    direct = os.path.realpath(os.path.join(current_directory, normalized))
+                    root = os.path.realpath(current_directory)
+                    try:
+                        contained = os.path.commonpath((root, direct)) == root
+                    except ValueError:
+                        contained = False
+                    if name == base_name and contained and os.path.isfile(direct):
+                        return EndianBinaryReader(open(direct, "rb")), True
+                candidate = search_resource_file(current_directory, name)
+                if candidate:
+                    return EndianBinaryReader(open(candidate, "rb")), True
+            break
+        container = getattr(container, "parent", None)
 
-    if os.path.isfile(resource_file_path):
-        return EndianBinaryReader(open(resource_file_path, "rb"))
-    else:
-        # 🔧 fallback: return the assets_file reader itself
-        return assets_file.reader
+    raise FileNotFoundError(f"Can't find the resource file {res_path}")
 
 
 def search_resource_file(path, name):
-    #print("real file", path, name)
-    files = glob.glob(os.path.join(path, "**", name), recursive=True)
-    return files[0] if len(files) else ""
-
+    root = os.path.realpath(path)
+    matches = set()
+    for directory, _, files in os.walk(root, followlinks=False):
+        for entry in files:
+            if os.path.normcase(entry) != os.path.normcase(name):
+                continue
+            resolved = os.path.realpath(os.path.join(directory, entry))
+            try:
+                contained = os.path.commonpath((root, resolved)) == root
+            except ValueError:
+                contained = False
+            if contained and os.path.isfile(resolved):
+                matches.add(resolved)
+    if len(matches) > 1:
+        raise ValueError(f"Ambiguous resource {name!r}: {len(matches)} files match")
+    return next(iter(matches), "")
