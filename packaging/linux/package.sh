@@ -16,12 +16,12 @@ Image.open('icon.ico').convert('RGBA').resize((64,64), Image.Resampling.LANCZOS)
 PY
 cat > "$stage/DEBIAN/control" <<'EOF'
 Package: aov-uabe-2022
-Version: 2.4-1
+Version: 2.4-2
 Section: utils
 Priority: optional
 Architecture: amd64
 Maintainer: ShownAlan
-Depends: libc6 (>= 2.41), libgl1, libegl1, libegl-mesa0, libgl1-mesa-dri, libx11-6, libxext6, libxrender1, libxft2, libfontconfig1, libfreetype6, libxcb1
+Depends: libc6 (>= 2.41), libgl1, libegl1, libegl-mesa0, libgl1-mesa-dri, libx11-6, libxext6, libxrender1, libxft2, libfontconfig1, libfreetype6, libxcb1, fonts-noto-cjk, fonts-dejavu-core
 Homepage: https://github.com/Alanshown/AOV_UABE_2022
 Description: AssetBundle desktop workshop for Unity 2022
  Open, inspect, export, save and rebuild AssetBundle assets.
