@@ -11,13 +11,16 @@ initialize, the file chooser still works.
 The cross-wheel color
 regression tests also cover the Windows etcpak pin.
 
+Use a fresh clean checkout of the exact reviewed commit. See
+[the release build runbook](../RELEASE_BUILD.md) for native build, install
+verification and artifact provenance.
+
 ```sh
-python -m pip install -r packaging/linux/requirements-build.txt
-python -m pytest -q
-python -m PyInstaller --noconfirm --clean packaging/linux/AOV_UABE_2022.spec
-sh packaging/linux/package.sh
+python3 -m venv .release-venv
+. .release-venv/bin/activate
+sh packaging/linux/build.sh <full-sha>
 ```
 
-The artifact remains named `AOV_UABE_2022-2.4-Linux-x64.deb`; its Debian version
-is `2.4-2` so package managers upgrade both earlier 2.4 Debian revisions.
-The app continues to display version 2.4.
+The artifact is `AOV_UABE_2022-2.5-Linux-x64.deb`, Debian version `2.5-1`.
+The app displays 2.5. The release check verifies the package version is
+strictly newer than the previously shipped `2.4-2`.
