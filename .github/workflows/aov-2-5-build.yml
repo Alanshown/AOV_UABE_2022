@@ -58,7 +58,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
-            ca-certificates git xz-utils binutils python3-venv python3-tk ffmpeg \
+            ca-certificates git xz-utils binutils python3-venv python3-tk libpython3.13 ffmpeg \
             xvfb xauth x11-utils libgl1 libegl1 libegl-mesa0 libgl1-mesa-dri \
             libx11-6 libxext6 libxrender1 libxft2 libfontconfig1 libfreetype6 libxcb1 \
             fonts-noto-cjk fonts-dejavu-core
