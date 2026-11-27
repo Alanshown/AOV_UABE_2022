@@ -25,7 +25,7 @@ from UI.ModernTheme import (
 from AssetbundleUtils.AssetsList import list_assets_window
 
 
-APP_VERSION = "2.3.6"
+APP_VERSION = "2.4"
 
 
 def get_resource_path(filename: str) -> str:
@@ -79,7 +79,7 @@ class Launcher:
         self.language_listener = subscribe(self.apply_language)
         self.vars: dict[str, tk.StringVar] = {}
 
-        root.title(tr("app_title"))
+        root.title(f"{tr('app_title')} {APP_VERSION}")
         root.minsize(920, 580)
         root.configure(bg=COLORS["canvas"])
         center_window(root, 1060, 680)
@@ -353,7 +353,7 @@ class Launcher:
 
     def apply_language(self, code: str):
         self.lang_code = code
-        self.root.title(tr("app_title"))
+        self.root.title(f"{tr('app_title')} {APP_VERSION}")
         for key, variable in self.vars.items():
             variable.set(tr(key))
         for label_key, label_var, detail_key, detail_var in self.feature_vars:
@@ -454,7 +454,7 @@ class Launcher:
             list_assets_window(self.selected_path, self.is_directory, self.root)
 
     def about(self):
-        show_dialog(self.root, tr("app_title"), tr("about_body"))
+        show_dialog(self.root, f"{tr('app_title')} {APP_VERSION}", tr("about_body"))
 
     def close(self):
         unsubscribe(self.language_listener)
