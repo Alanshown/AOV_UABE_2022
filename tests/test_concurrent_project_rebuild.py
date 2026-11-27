@@ -89,3 +89,24 @@ def test_edit_to_old_inode_during_directory_swap_is_not_discarded(tmp_path, afte
         assert sidecar.read_bytes() == new
         assert not list(root.parent.glob(".aov-project-*"))
     assert out.is_file()
+
+
+def test_same_size_concurrent_edit_detected_when_file_stat_is_unchanged(tmp_path):
+    root, sidecar, old, new = _prepared(tmp_path)
+    out = tmp_path / "out.assetbundle"
+    out.write_bytes(b"older output")
+    assert old != new and len(old) == len(new)
+    original = P._apply_project_objects
+
+    def edit_while_rebuilding(*args, **kwargs):
+        result = original(*args, **kwargs)
+        sidecar.write_bytes(new)
+        return result
+
+    # Model Windows / network storage that has not refreshed the timestamps.
+    with patch.object(P, "_project_path_stamp", return_value=(0, 0, 0, 0, 0)), \
+         patch.object(P, "_apply_project_objects", side_effect=edit_while_rebuilding):
+        with pytest.raises(OSError, match="source project changed during rebuild"):
+            P.rebuild_bundle_project(str(root), str(out))
+    assert out.read_bytes() == b"older output"
+    assert sidecar.read_bytes() == new
