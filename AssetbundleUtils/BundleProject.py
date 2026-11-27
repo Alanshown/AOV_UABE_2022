@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import struct
 import tempfile
 import unicodedata
@@ -3930,7 +3931,11 @@ def optimize_sprite_atlas_textures(
     return optimized
 
 
-def _project_snapshot(root: str) -> dict:
+def _project_path_stamp(st) -> tuple:
+    return st.st_dev, st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size
+
+
+def _project_snapshot(root: str, *, verify_contents: bool = True) -> dict:
     """Detect concurrent edits and refuse to follow links in a writeback tree."""
     isjunction = getattr(os.path, "isjunction", lambda p: False)
     if os.path.islink(root) or isjunction(root):
@@ -3945,9 +3950,23 @@ def _project_snapshot(root: str) -> dict:
             if os.path.islink(path) or isjunction(path):
                 raise OSError(f"Cannot safely refresh a project containing a link: {path}")
             st = os.stat(path)
-            snapshot[_relative(path, root)] = (
-                st.st_dev, st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size,
-            )
+            stamp = _project_path_stamp(st)
+            digest = None
+            if stat.S_ISREG(st.st_mode) and verify_contents:
+                # On Windows, rapid same-size saves can report identical
+                # timestamps. Hash bounded chunks so the live edit is not
+                # overwritten by stale rebuilt data on any platform.
+                with open(path, "rb") as handle:
+                    before = _project_path_stamp(os.fstat(handle.fileno()))
+                    hasher = hashlib.sha256()
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        hasher.update(chunk)
+                    if _project_path_stamp(os.fstat(handle.fileno())) != before:
+                        raise OSError(f"The source project changed during rebuild: {path}")
+                    digest = hasher.digest()
+            elif not stat.S_ISREG(st.st_mode) and not stat.S_ISDIR(st.st_mode):
+                raise OSError(f"Cannot safely refresh a project containing a special file: {path}")
+            snapshot[_relative(path, root)] = (*stamp, digest)
     return snapshot
 
 
@@ -3962,7 +3981,7 @@ def _stage_project_refresh(project_dir: str, manifest: dict, verified, edited: d
         staged = os.path.join(stage_root, "updated")
         previous = os.path.join(stage_root, "previous")
         shutil.copytree(project_dir, staged, symlinks=True)
-        _project_snapshot(staged)
+        _project_snapshot(staged, verify_contents=False)
         _refresh_project_manifest(staged, manifest, verified, edited)
         if _project_snapshot(project_dir) != baseline:
             raise OSError("The source project changed during refresh; no changes were applied")
