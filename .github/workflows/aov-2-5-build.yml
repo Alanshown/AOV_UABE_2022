@@ -10,6 +10,9 @@ on:
         type: string
 permissions:
   contents: read
+concurrency:
+  group: aov-25-${{ github.ref }}
+  cancel-in-progress: true
 env:
   EXPECTED_COMMIT: ${{ inputs.commit || github.sha }}
 jobs:
