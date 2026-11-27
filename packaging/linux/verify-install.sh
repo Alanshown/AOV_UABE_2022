@@ -8,6 +8,7 @@ test -x /usr/bin/aov-uabe-2022
 if [ "${1:-}" = --under-xvfb ]; then
     scratch=$2
     export HOME="$scratch" XDG_CONFIG_HOME="$scratch/config" XDG_DATA_HOME="$scratch/data" XDG_CACHE_HOME="$scratch/cache"
+    export LANG=C.UTF-8 LC_ALL=C.UTF-8
     /usr/bin/aov-uabe-2022 >"$scratch/application.log" 2>&1 &
     app=$!
     trap 'kill "$app" 2>/dev/null || true; wait "$app" 2>/dev/null || true' EXIT
