@@ -1,15 +1,15 @@
 #define Product "AOV_UABE_2022"
-#define Version "2.4"
+#define Version "2.5"
 [Setup]
 AppId={code:SelectAppId}
 AppName={#Product}
 AppVersion={#Version}
 AppVerName={#Product} {#Version}
 AppPublisher=ShownAlan
-VersionInfoVersion=2.4.0.0
-VersionInfoTextVersion=2.4
-VersionInfoProductVersion=2.4.0.0
-VersionInfoProductTextVersion=2.4
+VersionInfoVersion=2.5.0.0
+VersionInfoTextVersion=2.5
+VersionInfoProductVersion=2.5.0.0
+VersionInfoProductTextVersion=2.5
 DefaultDirName={localappdata}\Programs\{#Product}
 DefaultGroupName={code:SelectDefaultGroup}
 PrivilegesRequired=lowest
@@ -45,7 +45,7 @@ Name: "{group}\AOV UABE 2022"; Filename: "{app}\AOV_UABE_2022.exe"; WorkingDir: 
 Name: "{autodesktop}\AOV UABE 2022"; Filename: "{app}\AOV_UABE_2022.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\AOV_UABE_2022.exe"; Description: "Launch AOV_UABE_2022 2.4"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\AOV_UABE_2022.exe"; Description: "Launch AOV_UABE_2022 2.5"; Flags: nowait postinstall skipifsilent
 
 [Code]
 const

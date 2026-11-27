@@ -7,7 +7,7 @@ try { $install = & (Join-Path $PSScriptRoot "verify-upgrade.ps1") } catch {
     throw
 }
 $exe = Get-Item (Join-Path $install 'AOV_UABE_2022.exe')
-if ($exe.VersionInfo.ProductVersion -ne '2.4') { throw 'Installed EXE is not version 2.4' }
+if ($exe.VersionInfo.ProductVersion -ne '2.5') { throw 'Installed EXE is not version 2.5' }
 Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
 using System;
@@ -41,7 +41,7 @@ try {
         Start-Sleep -Seconds 1
         $app.Refresh()
         if ($app.HasExited) { throw 'Installed app exited before opening its main window' }
-        if ($app.MainWindowHandle -ne 0 -and $app.MainWindowTitle -match '2022 2\.4$') { $found = $true; break }
+        if ($app.MainWindowHandle -ne 0 -and $app.MainWindowTitle -match '2022 2\.5$') { $found = $true; break }
         if ($app.MainWindowTitle -match 'exception|启动失败') {
             $diag = [AovWindowCapture]::ReadDialog($app.MainWindowHandle)
             $startup = Join-Path $env:LOCALAPPDATA 'AOV_UABE_2022/startup_error.log'
@@ -49,7 +49,7 @@ try {
             throw "Installed app startup error: $diag"
         }
     }
-    if (!$found) { throw "No visible 2.4 window; last title was $($app.MainWindowTitle)" }
+    if (!$found) { throw "No visible 2.5 window; last title was $($app.MainWindowTitle)" }
     Start-Sleep -Seconds 2
     $bounds = New-Object AovWindowCapture+Rect
     if (![AovWindowCapture]::GetWindowRect($app.MainWindowHandle, [ref]$bounds)) { throw 'Cannot read the installed app window bounds' }
@@ -68,7 +68,7 @@ try {
             for ($x=20; $x -lt $width; $x+=10) { [void]$colors.Add($bitmap.GetPixel($x,$y).ToArgb()) }
         }
         if ($colors.Count -lt 24) { throw 'Capture looks blank or incomplete' }
-        $bitmap.Save((Join-Path (Resolve-Path artifacts) 'AOV_UABE_2022-2.4-Windows-install-success.png'), [Drawing.Imaging.ImageFormat]::Png)
+        $bitmap.Save((Join-Path (Resolve-Path artifacts) 'AOV_UABE_2022-2.5-Windows-install-success.png'), [Drawing.Imaging.ImageFormat]::Png)
     } finally {
         $graphics.Dispose()
         $bitmap.Dispose()
