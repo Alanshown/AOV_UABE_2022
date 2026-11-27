@@ -16,7 +16,7 @@ Image.open('icon.ico').convert('RGBA').resize((64,64), Image.Resampling.LANCZOS)
 PY
 cat > "$stage/DEBIAN/control" <<'EOF'
 Package: aov-uabe-2022
-Version: 2.4-2
+Version: 2.5-1
 Section: utils
 Priority: optional
 Architecture: amd64
@@ -34,12 +34,13 @@ chmod 755 "$stage/usr/bin/aov-uabe-2022"
 cat > "$stage/usr/share/applications/aov-uabe-2022.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
-Name=AOV_UABE_2022 2.4
+Name=AOV_UABE_2022 2.5
 Comment=AssetBundle workshop for Unity 2022
 Exec=aov-uabe-2022
 Icon=aov-uabe-2022
 Terminal=false
 Categories=Development;Utility;
 EOF
-dpkg-deb --root-owner-group -Zxz -z6 --build "$stage" ./artifacts/AOV_UABE_2022-2.4-Linux-x64.deb
-dpkg-deb --info ./artifacts/AOV_UABE_2022-2.4-Linux-x64.deb
+export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct)}
+dpkg-deb --root-owner-group -Zxz -z6 --build "$stage" ./artifacts/AOV_UABE_2022-2.5-Linux-x64.deb
+dpkg-deb --info ./artifacts/AOV_UABE_2022-2.5-Linux-x64.deb

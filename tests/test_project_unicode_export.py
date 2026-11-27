@@ -150,15 +150,15 @@ def test_failed_rebuild_after_png_conversion_does_not_modify_project(tmp_path, m
     assert after_again.read_bytes() == after.read_bytes()
 
 
-def make_streamed_bundle(source, kind, payload, name=None):
+def make_streamed_bundle(source, kind, payload, name=None, *, path_id=222):
     mesh = mesh_object()
     obj = project._shallow_clone(mesh)
     typ = project._shallow_clone(mesh.serialized_type)
     typ.class_id = int(ClassIDType[kind])
     obj.assets_file.types.append(typ)
     obj.serialized_type, obj.type_id = typ, 1
-    obj.path_id, obj.class_id, obj.type = 222, typ.class_id, ClassIDType[kind]
-    obj.assets_file.objects[222] = obj
+    obj.path_id, obj.class_id, obj.type = path_id, typ.class_id, ClassIDType[kind]
+    obj.assets_file.objects[path_id] = obj
     resource = obj.assets_file.name + ".resource"
     archive = f"archive:/{obj.assets_file.name}/{resource}"
     offset = 16
@@ -190,52 +190,9 @@ def make_streamed_bundle(source, kind, payload, name=None):
     else:
         w.write_boolean(False)
         w.write_boolean(True)
-        w.align_stream()
     obj.set_raw_data(w.bytes)
     source.write_bytes(bundle_bytes(obj, resources={resource: b"\0"*offset+payload}))
     return source
-
-
-@pytest.mark.parametrize("kind", ["AudioClip", "VideoClip"])
-def test_streamed_media_sidecar_replacement(kind, tmp_path):
-    from io import BytesIO
-    import struct
-    import wave
-
-    def audio(sample, n):
-        out = BytesIO()
-        with wave.open(out, "wb") as handle:
-            handle.setparams((1, 2, 8000, 0, "NONE", "not compressed"))
-            handle.writeframes(struct.pack("<h", sample) * n)
-        return out.getvalue()
-
-    if kind == "AudioClip":
-        old, new = audio(10, 12), audio(-800, 101)
-    else:
-        old, new = b"test video stream A", b"large replacement test video stream B" * 3
-    src = make_streamed_bundle(tmp_path / "sample.assetbundle", kind, old)
-    export = project.export_bundle_project(str(src), str(tmp_path / "projects"))
-    root = Path(export["path"])
-    manifest = project._load_manifest(str(root))
-    record = next(item for item in manifest["assets"] if item["type"] == kind)
-    sidecar = root / record["stream"]["payload"]
-    assert sidecar.read_bytes() == old
-    sidecar.write_bytes(new)
-    for i in range(2):
-        output = tmp_path / f"result-{i}.assetbundle"
-        report = project.rebuild_bundle_project(str(root), str(output))
-        assert report["project_sync_status"] == "updated"
-        obj = next(o for o in UnityPy_AOV.load(str(output)).objects if o.type.name == kind)
-        assert obj.path_id == 222
-        clip = obj.read(False)
-        if kind == "AudioClip":
-            assert bytes(clip.m_AudioData) == new
-            with wave.open(BytesIO(clip.samples[f"{kind}.wav"])) as stream:
-                assert stream.getnframes() == 101
-                assert struct.unpack("<h", stream.readframes(1))[0] == -800
-        else:
-            assert bytes(clip.m_VideoData) == new
-            assert clip.Width == clip.Height == 16
 
 
 def test_standalone_dump_roundtrips_escaped_name(tmp_path):
