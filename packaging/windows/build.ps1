@@ -13,7 +13,7 @@ if ($LASTEXITCODE) { throw 'Source regression tests failed' }
   --add-data 'icon.ico:.' --add-data 'Settings.json:.' --add-data 'lang.json:.' `
   --add-data 'AssetbundleUtils/UnityPy_AOV/resources:AssetbundleUtils/UnityPy_AOV/resources' `
   --add-data 'AssetbundleUtils/UnityPy_AOV/helpers/global-metadata.dat:AssetbundleUtils/UnityPy_AOV/helpers' `
-  --collect-all tkinterdnd2 --collect-submodules pyfmodex main.py
+  --collect-all tkinterdnd2 --collect-all archspec --collect-all astc_encoder --hidden-import pyfmodex main.py
 if ($LASTEXITCODE) { throw 'PyInstaller failed' }
 $compiler = @((Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'), (Join-Path $env:ProgramFiles 'Inno Setup 6/ISCC.exe')) |
   Where-Object { Test-Path $_ } | Select-Object -First 1

@@ -12,11 +12,26 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Collections.Generic;
 public static class AovWindowCapture {
   [StructLayout(LayoutKind.Sequential)]
   public struct Rect { public int L, T, R, B; }
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr handle, IntPtr dc, uint flags);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr handle, out Rect bounds);
+  public delegate bool ChildCallback(IntPtr hwnd, IntPtr arg);
+  [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr parent, ChildCallback callback, IntPtr arg);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern IntPtr SendMessage(IntPtr handle, uint message, IntPtr length, StringBuilder output);
+  public static string ReadDialog(IntPtr parent) {
+      List<string> parts = new List<string>();
+      EnumChildWindows(parent, (hwnd, _) => {
+          StringBuilder b = new StringBuilder(4096);
+          SendMessage(hwnd, 0x000D, new IntPtr(b.Capacity), b);
+          if (b.Length != 0) parts.Add(b.ToString());
+          return true;
+      }, IntPtr.Zero);
+      return String.Join(Environment.NewLine, parts);
+  }
 }
 '@
 $app = Start-Process -FilePath $exe.FullName -WorkingDirectory $install -PassThru
@@ -27,6 +42,12 @@ try {
         $app.Refresh()
         if ($app.HasExited) { throw 'Installed app exited before opening its main window' }
         if ($app.MainWindowHandle -ne 0 -and $app.MainWindowTitle -match '2022 2\.4$') { $found = $true; break }
+        if ($app.MainWindowTitle -match 'exception|启动失败') {
+            $diag = [AovWindowCapture]::ReadDialog($app.MainWindowHandle)
+            $startup = Join-Path $env:LOCALAPPDATA 'AOV_UABE_2022/startup_error.log'
+            if (Test-Path $startup) { Get-Content $startup }
+            throw "Installed app startup error: $diag"
+        }
     }
     if (!$found) { throw "No visible 2.4 window; last title was $($app.MainWindowTitle)" }
     Start-Sleep -Seconds 2
