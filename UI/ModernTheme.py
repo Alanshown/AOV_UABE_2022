@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import sys
 import tkinter as tk
 from tkinter import font as tkfont, ttk
 from typing import Callable, Optional
@@ -50,15 +51,18 @@ COLORS = {
     "gradient_end": "#BEA8F4",
 }
 
+UI_FONT = "Noto Sans CJK SC" if sys.platform.startswith("linux") else "Microsoft YaHei UI"
+MONO_FONT = "DejaVu Sans Mono" if sys.platform.startswith("linux") else "Cascadia Mono"
+
 FONTS = {
-    "hero": ("Microsoft YaHei UI", 28, "bold"),
-    "title": ("Microsoft YaHei UI", 16, "bold"),
-    "heading": ("Microsoft YaHei UI", 12, "bold"),
-    "body": ("Microsoft YaHei UI", 10),
-    "body_bold": ("Microsoft YaHei UI", 10, "bold"),
-    "small": ("Microsoft YaHei UI", 9),
-    "tiny": ("Microsoft YaHei UI", 8),
-    "mono": ("Cascadia Mono", 9),
+    "hero": (UI_FONT, 28, "bold"),
+    "title": (UI_FONT, 16, "bold"),
+    "heading": (UI_FONT, 12, "bold"),
+    "body": (UI_FONT, 10),
+    "body_bold": (UI_FONT, 10, "bold"),
+    "small": (UI_FONT, 9),
+    "tiny": (UI_FONT, 8),
+    "mono": (MONO_FONT, 9),
 }
 
 BUTTON_STYLES = {}
