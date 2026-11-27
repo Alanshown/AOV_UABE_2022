@@ -18,6 +18,12 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from PIL import Image
 
 from AssetbundleUtils import UnityPy_AOV
+from AssetbundleUtils.ProjectIdentity import plan_asset_assignments
+from AssetbundleUtils.ProjectMedia import update_audio_metadata, verify_video_replacement
+from AssetbundleUtils.ProjectOutput import (
+    publish_rebuild_output, rebuild_output_snapshot, reserve_project_output,
+)
+from AssetbundleUtils.ProjectRepresentationMerge import merge_typetrees
 from AssetbundleUtils.MeshImport import replace_mesh_from_obj, validate_mesh_payload, synchronize_mesh_renderer_bounds
 from AssetbundleUtils.SpriteImport import (
     SpriteProjectIndex, replace_sprite_image, resolve_sprite_backing,
@@ -26,6 +32,7 @@ from AssetbundleUtils.TextureImport import (
     optimize_texture_runtime_storage,
     replace_texture_image,
     texture_runtime_metadata,
+    texture_preview_png,
     validate_texture_roundtrip,
 )
 from AssetbundleUtils.UnityPy_AOV.enums import TextureFormat
@@ -46,6 +53,7 @@ SCHEMA = "aov-uabe.bundle-project/v2"
 ASSET_INDEX_SCHEMA = "aov-uabe.asset-index/v1"
 ASSET_INDEX_JSON = "asset_index.json"
 ASSET_INDEX_CSV = "asset_index.csv"
+_BACKUP_SNAPSHOT_MEMORY_LIMIT = 32 * 1024 * 1024
 
 
 TYPE_DIRECTORIES = {
@@ -75,10 +83,39 @@ TYPE_DIRECTORIES = {
 DIRECTORY_TYPES = {value: key for key, value in TYPE_DIRECTORIES.items()}
 
 
+# All project representations share a stem. Reserve the longest generated
+# extension (.json / .resS) and the actual signed PathID before shortening.
+_PROJECT_COMPONENT_BYTES = 255
+_PROJECT_EXTENSION_BYTES = 5
+_WINDOWS_DEVICE_STEM = re.compile(
+    r"(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])", re.IGNORECASE
+)
+
+
+def _asset_export_name(name: str, path_id: int, type_name: str) -> str:
+    """Return a portable display alias, never a replacement for Unity m_Name."""
+    label = _safe_filename(name, type_name)
+    suffix = f"_{int(path_id)}"
+    # Device names are reserved even when a period introduces an extension,
+    # e.g. CON.example_101.raw; CON_101.raw itself is not reserved.
+    if _WINDOWS_DEVICE_STEM.fullmatch(
+        (label + suffix).split(".", 1)[0].rstrip(" ")
+    ):
+        label = "_" + label
+    budget = _PROJECT_COMPONENT_BYTES - _PROJECT_EXTENSION_BYTES - len(suffix)
+    encoded_label = label.encode("utf-8")
+    if len(encoded_label) <= budget:
+        return label
+    # Hash the full original name, not the sanitized 100-character prefix,
+    # including any undecodable Unity bytes represented by surrogateescape.
+    digest = hashlib.sha256(str(name or "").encode("utf-8", "surrogatepass"))
+    tag = "~" + digest.hexdigest()[:16]
+    prefix = encoded_label[:budget - len(tag)].decode("utf-8", errors="ignore")
+    return prefix.rstrip(" .") + tag
+
+
 def _asset_file_stem(name: str, path_id: int, type_name: str) -> str:
-    return (
-        f"{_safe_filename(name, type_name)}_{int(path_id)}"
-    )
+    return f"{_asset_export_name(name, path_id, type_name)}_{int(path_id)}"
 
 
 def _parse_asset_file_stem(stem: str) -> Tuple[str, int]:
@@ -630,6 +667,21 @@ def _export_decoded_asset(obj, data, asset_dir: str, base: str) -> Dict[str, obj
     return exported
 
 
+def _validate_project_object_identity(environment):
+    """The current project format requires bundle-wide unique PathIDs."""
+    owners = {}
+    for assets_file in environment.assets:
+        for path_id in assets_file.objects:
+            previous = owners.setdefault(int(path_id), assets_file)
+            if previous is not assets_file:
+                raise ValueError(
+                    f"PathID {path_id} occurs in multiple CABs "
+                    f"({previous.name!r}, {assets_file.name!r}). "
+                    "The current project format cannot distinguish them; "
+                    "full project export/rebuild was stopped without publishing output."
+                )
+
+
 def export_bundle_project(
     source_path: str,
     output_root: str,
@@ -685,6 +737,13 @@ def _export_bundle_project_into(
         _write_bytes(backup_path, source_bytes)
     environment = UnityPy_AOV.load(backup_path)
     bundle = environment.file
+    _validate_project_object_identity(environment)
+    internal_names = set()
+    for name in bundle.files:
+        normalized_name = _safe_filename(name, "node").casefold()
+        if normalized_name in internal_names:
+            raise ValueError(f"Internal bundle node filename collision for {name!r}")
+        internal_names.add(normalized_name)
     recover_unambiguous_texture_streams(environment)
 
     nodes = []
@@ -856,10 +915,7 @@ def _stage_cross_bundle_assets_into(
     manifest = _load_manifest(project_dir)
     if manifest.get("$schema") != SCHEMA:
         raise ValueError("Cross-bundle imports require a v2 project; export it again first")
-    backup_path = os.path.join(
-        project_dir, *manifest["source"]["backup"].split("/")
-    )
-    target_environment = UnityPy_AOV.load(backup_path)
+    target_environment = _load_verified_project_backup(project_dir, manifest)
     target_cabs = list(target_environment.assets)
     if len(target_cabs) != 1:
         raise ValueError("Cross-bundle import requires one unambiguous target CAB")
@@ -1192,6 +1248,78 @@ def _load_manifest(project_dir: str) -> dict:
     return manifest
 
 
+def _load_verified_project_backup(project_dir: str, manifest: dict):
+    """Verify and parse one private snapshot of the immutable input bundle."""
+    source = manifest["source"]
+    expected = source.get("sha256")
+    if not isinstance(expected, str) or re.fullmatch(r"[0-9a-fA-F]{64}", expected) is None:
+        legacy = " Legacy project" if manifest.get("$schema") == SCHEMA_V1 else " Project"
+        raise ValueError(
+            f"Bundle project backup SHA-256 is missing or invalid.{legacy} must be "
+            "re-exported from the trusted original before rebuilding or importing assets."
+        )
+    backup_entry = source.get("backup")
+    if not isinstance(backup_entry, str) or not backup_entry:
+        raise ValueError("Bundle project backup location is missing or invalid")
+    backup = os.path.join(project_dir, *backup_entry.split("/"))
+    root = os.path.normcase(os.path.realpath(project_dir))
+    actual_path = os.path.normcase(os.path.realpath(backup))
+    try:
+        inside = os.path.commonpath((root, actual_path)) == root and root != actual_path
+    except ValueError:  # Windows paths on different volumes.
+        inside = False
+    if not inside:
+        raise ValueError("Bundle project backup must be inside the exported project")
+    if not os.path.isfile(backup):
+        raise ValueError(f"Bundle project backup is missing: {backup}")
+
+    expected_size = source.get("bytes")
+    if "bytes" in source and (type(expected_size) is not int or expected_size < 0):
+        raise ValueError("Bundle project backup size in manifest is invalid")
+
+    def check(digest, size):
+        if expected_size is not None and size != expected_size:
+            raise ValueError(
+                f"Bundle project backup SHA-256 mismatch (recorded size {expected_size}, "
+                f"actual size {size}): {backup}. Restore the original backup or re-export "
+                "the project from the trusted original."
+            )
+        if digest.hexdigest() != expected.lower():
+            raise ValueError(
+                f"Bundle project backup SHA-256 mismatch: {backup}. Restore the original "
+                "backup or re-export the project from the trusted original."
+            )
+
+    def parse(snapshot):
+        # Preserve the original path context for companion resources, but
+        # never let the parser reopen the live backup by filename.
+        environment = UnityPy_AOV.Environment()
+        environment.path = os.path.dirname(os.path.abspath(backup))
+        environment.file = environment.load_file(snapshot, name=backup)
+        return environment
+
+    with open(backup, "rb") as handle:
+        head = handle.read(_BACKUP_SNAPSHOT_MEMORY_LIMIT + 1)
+        digest = hashlib.sha256(head)
+        size = len(head)
+        if size <= _BACKUP_SNAPSHOT_MEMORY_LIMIT:
+            check(digest, size)
+            return parse(head)
+        # The bundle parser owns each decompressed inner file after loading;
+        # for large inputs, a private file avoids a second large RAM copy.
+        with tempfile.TemporaryDirectory(prefix="aov-backup-") as temporary:
+            with open(os.path.join(temporary, "backup.assetbundle"), "w+b") as snapshot:
+                snapshot.write(head)
+                del head
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                    size += len(chunk)
+                    snapshot.write(chunk)
+                check(digest, size)
+                snapshot.seek(0)
+                return parse(snapshot)
+
+
 def _restore_resource_nodes(bundle, project_dir: str, manifest: dict) -> None:
     for node_info in manifest["nodes"]:
         if node_info["kind"] != "resource":
@@ -1275,6 +1403,39 @@ def _install_imported_types(environment, manifest: dict) -> None:
         assets_file.mark_changed()
 
 
+def _typetree_base_path(project_dir, digest):
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        return None
+    return os.path.join(project_dir, "internal", "typetree_bases", f"{digest}.raw")
+
+
+def _merge_project_typetree(project_dir, obj, editable, expected_raw, original_raw, *, managed_name=None):
+    location = f"{obj.type.name} PathID {obj.path_id}"
+    if expected_raw and original_raw is not None and _sha256(original_raw) == expected_raw:
+        base_bytes = original_raw
+    else:
+        path = _typetree_base_path(project_dir, expected_raw)
+        try:
+            with open(path, "rb") as handle:
+                base_bytes = handle.read()
+        except (OSError, TypeError) as exc:
+            raise ValueError(
+                f"{location}: simultaneous RAW and JSON edits have no verified base; "
+                "apply one edit at a time or re-export the asset"
+            ) from exc
+        if _sha256(base_bytes) != expected_raw:
+            raise ValueError(f"{location}: verified RAW merge base is damaged")
+    base_reader = _shallow_clone(obj)
+    base_reader.data = base_bytes
+    base_reader.byte_size = len(base_bytes)
+    try:
+        base = base_reader.read_typetree()
+        raw = obj.read_typetree()
+    except Exception as exc:
+        raise ValueError(f"{location}: cannot decode RAW and JSON merge inputs") from exc
+    return merge_typetrees(base, raw, editable, location, managed_name=managed_name)
+
+
 def _apply_legacy_project_objects(environment, project_dir: str, manifest: dict):
     lookup = {
         (int(obj.path_id), obj.type.name): obj for obj in environment.objects
@@ -1298,6 +1459,7 @@ def _apply_legacy_project_objects(environment, project_dir: str, manifest: dict)
         obj = lookup[key]
         raw_path = os.path.join(project_dir, *item["raw"].split("/"))
         raw = open(raw_path, "rb").read()
+        previous = obj.get_raw_data()
         obj.set_raw_data(raw)
 
         editable = item.get("editable")
@@ -1318,7 +1480,7 @@ def _apply_legacy_project_objects(environment, project_dir: str, manifest: dict)
             editable_path = os.path.join(project_dir, *editable.split("/"))
             current_hash = _sha256(open(editable_path, "rb").read())
             if current_hash != item.get("editable_sha256"):
-                edited_typetrees.append((obj, editable_path))
+                edited_typetrees.append((obj, editable_path, item.get("sha256"), previous, raw))
 
     for obj, editable_path in edited_images:
         with Image.open(editable_path) as source:
@@ -1329,9 +1491,13 @@ def _apply_legacy_project_objects(environment, project_dir: str, manifest: dict)
     for obj, editable_path in edited_meshes:
         replace_mesh_from_obj(obj, editable_path)
         synchronize_mesh_renderer_bounds([environment], obj)
-    for obj, editable_path in edited_typetrees:
+    for obj, editable_path, expected_raw, previous, raw in edited_typetrees:
         with open(editable_path, "r", encoding="utf-8-sig") as handle:
             tree = json.load(handle)
+        if _sha256(raw) != (expected_raw or _sha256(previous)):
+            tree = _merge_project_typetree(
+                project_dir, obj, tree, expected_raw or _sha256(previous), previous
+            )
         obj.save_typetree(tree)
     return {
         "textures": len(edited_images),
@@ -1548,7 +1714,11 @@ def _scan_project_assets(project_dir: str, manifest: dict) -> dict:
                 backup_source = backup_records.get(key)
                 original_export_name = None
                 if source:
-                    source_stem = source.get("file_stem")
+                    # Legacy manifests can omit file_stem. Their recorded RAW
+                    # basename still identifies the original filename alias.
+                    source_stem = source.get("file_stem") or os.path.splitext(
+                        os.path.basename(source["raw"].replace("\\", "/"))
+                    )[0]
                     if source_stem:
                         try:
                             original_export_name, _ = _parse_asset_file_stem(
@@ -1570,18 +1740,17 @@ def _scan_project_assets(project_dir: str, manifest: dict) -> dict:
                 )
                 changed_names = [
                     name for name in names
-                    if original_export_name is None
-                    or name.casefold() != original_export_name.casefold()
+                    if name != original_export_name
                 ]
                 if (
                     source
-                    and parsed_name.casefold() == original_export_name.casefold()
+                    and parsed_name == original_export_name
                     and len(changed_names) == 1
                 ):
                     chosen_export_name = changed_names[0]
                 elif (
                     source
-                    and parsed_name.casefold() == original_export_name.casefold()
+                    and parsed_name == original_export_name
                     and len(changed_names) > 1
                 ):
                     raise ValueError(
@@ -1592,8 +1761,7 @@ def _scan_project_assets(project_dir: str, manifest: dict) -> dict:
                     chosen_export_name = parsed_name
                 if (
                     source
-                    and chosen_export_name.casefold()
-                    == original_export_name.casefold()
+                    and chosen_export_name == original_export_name
                 ):
                     chosen_name = source.get("name", chosen_export_name)
                 else:
@@ -1627,11 +1795,11 @@ def _scan_project_assets(project_dir: str, manifest: dict) -> dict:
                 ]
                 editable = None
                 exact_editable = [
-                    candidate_path
-                    for candidate_name, candidate_path
-                    in editable_candidates
-                    if candidate_name.casefold()
-                    == chosen_export_name.casefold()
+                    path for name, path in editable_candidates
+                    if name == chosen_export_name
+                ] or [
+                    path for name, path in editable_candidates
+                    if name.casefold() == chosen_export_name.casefold()
                 ]
                 if len(exact_editable) == 1:
                     editable = _relative(
@@ -1671,6 +1839,34 @@ def _scan_project_assets(project_dir: str, manifest: dict) -> dict:
                     item["_baseline_editable_sha256"] = (
                         source.get("editable_sha256") if source else None
                     )
+                    if editable.lower().endswith(".json"):
+                        editable_path = os.path.join(project_dir, *editable.split("/"))
+                        document_bytes = open(editable_path, "rb").read()
+                        changed_json = (
+                            _sha256(document_bytes) != item["_baseline_editable_sha256"]
+                        )
+                        old_name = source.get("name", "") if source else None
+                        filename_renamed = source is not None and chosen_name != old_name
+                        if changed_json or filename_renamed:
+                            tree = json.loads(document_bytes.decode("utf-8-sig"))
+                            if isinstance(tree, dict) and "m_Name" in tree:
+                                json_name = tree["m_Name"]
+                                if not isinstance(json_name, str):
+                                    raise ValueError(f"PathID {path_id}: JSON m_Name must be text")
+                                if source is not None and changed_json and json_name != old_name:
+                                    if (filename_renamed and json_name != chosen_name
+                                            and _asset_export_name(json_name, path_id, type_name) != chosen_export_name):
+                                        raise ValueError(
+                                            f"PathID {path_id}: filename and JSON m_Name request different names"
+                                        )
+                                    chosen_name = json_name
+                                    item["name"] = chosen_name
+                                    item["file_stem"] = _asset_file_stem(chosen_name, path_id, type_name)
+                                if json_name != chosen_name:
+                                    tree["m_Name"] = chosen_name
+                                    item["_refresh_editable_json"] = tree
+                            if changed_json:
+                                item["_edited_typetree_data"] = tree
                 else:
                     item.pop("editable", None)
                     item.pop("editable_sha256", None)
@@ -1724,95 +1920,107 @@ def _scan_project_assets(project_dir: str, manifest: dict) -> dict:
 
     original_keys = set(backup_records)
     scanned_keys = set(scanned)
-    unmatched_original = set(original_keys - scanned_keys)
-    unmatched_scanned = set(scanned_keys - original_keys)
+    assigned = plan_asset_assignments(current_records, scanned, manifest)
+    prior_slots = set(assigned.values())
+    live_origins = set()
     path_id_changes = []
-    claimed_new = set()
-    for old_key in sorted(unmatched_original):
-        before = backup_records[old_key]
-        candidates = [
-            new_key for new_key in unmatched_scanned - claimed_new
-            if new_key[0] == old_key[0]
-            and scanned[new_key].get("sha256") == before.get("sha256")
-            and scanned[new_key].get("name", "")
-            == before.get("name", "")
-        ]
-        if len(candidates) != 1:
-            candidates = [
-                new_key for new_key in unmatched_scanned - claimed_new
-                if new_key[0] == old_key[0]
-                and scanned[new_key].get("name", "")
-                == before.get("name", "")
-            ]
-        if len(candidates) != 1:
-            continue
-        new_key = candidates[0]
-        after = scanned[new_key]
-        after["source_node"] = before.get("source_node", "")
-        path_id_changes.append(
-            {
-                "type": after["type"],
-                "from_path_id": int(before["path_id"]),
-                "to_path_id": int(after["path_id"]),
-                "from_name": before.get("name", ""),
-                "to_name": after.get("name", ""),
-                "source_node": before.get("source_node", ""),
-            }
-        )
-        claimed_new.add(new_key)
-    changed_old_keys = {
-        (item["type"], int(item["from_path_id"]))
-        for item in path_id_changes
-    }
-    changed_new_keys = {
-        (item["type"], int(item["to_path_id"]))
-        for item in path_id_changes
-    }
-    deleted = [
-        {
-            "type": backup_records[key]["type"],
-            "path_id": int(backup_records[key]["path_id"]),
-            "name": backup_records[key].get("name", ""),
-            "source_node": backup_records[key].get("source_node", ""),
-        }
-        for key in sorted((original_keys - scanned_keys) - changed_old_keys)
-    ]
-    added = [
-        {
-            "type": scanned[key]["type"],
-            "path_id": int(scanned[key]["path_id"]),
-            "name": scanned[key].get("name", ""),
-            "source_node": scanned[key].get("source_node", ""),
-        }
-        for key in sorted((scanned_keys - original_keys) - changed_new_keys)
-    ]
-    renamed = []
-    modified_raw = []
-    for key in sorted(original_keys & scanned_keys):
-        before = backup_records[key]
+    added, renamed, modified_raw = [], [], []
+    for key in sorted(scanned_keys):
         after = scanned[key]
-        if before.get("name", "") != after.get("name", ""):
-            renamed.append(
-                {
-                    "type": after["type"],
-                    "path_id": int(after["path_id"]),
-                    "from": before.get("name", ""),
-                    "to": after.get("name", ""),
+        prior_key = assigned.get(key)
+        previous = current_records.get(prior_key) if prior_key else None
+        origin = None
+        if previous is not None:
+            origin = (key[0], int(previous.get("origin_path_id", prior_key[1])))
+            if origin not in original_keys:
+                origin = None
+        elif key in original_keys and key not in current_records:
+            # The user may restore a previously deleted original asset.
+            origin = key
+        before = backup_records.get(origin)
+        if origin is not None:
+            if origin in live_origins:
+                raise ValueError(f"Multiple project records claim backup asset {origin}")
+            live_origins.add(origin)
+            if origin != key or "origin_path_id" in (previous or {}):
+                after["origin_path_id"] = origin[1]
+        else:
+            after.pop("origin_path_id", None)
+        if previous is not None and prior_key != key:
+            if previous.get("file_stem"):
+                old_alias, _ = _parse_asset_file_stem(previous["file_stem"])
+                if after["name"] == old_alias:
+                    after["name"] = previous.get("name", old_alias)
+            for field in ("source_node", "serialized_type_hash"):
+                if field in previous:
+                    after[field] = previous[field]
+                else:
+                    after.pop(field, None)
+            if after.get("stream") and previous.get("stream"):
+                payload_fields = ("payload", "size", "payload_sha256")
+                after["stream"] = {
+                    **previous["stream"],
+                    **{field: after["stream"][field] for field in payload_fields},
                 }
-            )
-        if before.get("sha256") != after.get("sha256"):
-            modified_raw.append(
-                {
-                    "type": after["type"],
-                    "path_id": int(after["path_id"]),
-                    "name": after.get("name", ""),
-                }
-            )
+            baseline = previous.get("editable_sha256")
+            after["_baseline_editable_sha256"] = baseline
+            editable = after.get("editable", "")
+            if editable.lower().endswith(".json"):
+                editable_path = os.path.join(project_dir, *editable.split("/"))
+                document = open(editable_path, "rb").read()
+                if _sha256(document) == baseline:
+                    after.pop("_edited_typetree_data", None)
+                    if previous.get("name") != after["name"]:
+                        tree = json.loads(document.decode("utf-8-sig"))
+                        if isinstance(tree, dict) and "m_Name" in tree:
+                            tree["m_Name"] = after["name"]
+                            after["_refresh_editable_json"] = tree
+                else:
+                    tree = json.loads(document.decode("utf-8-sig"))
+                    if isinstance(tree, dict) and "m_Name" in tree:
+                        json_name = tree["m_Name"]
+                        if json_name not in (previous.get("name"), after["name"]):
+                            raise ValueError(f"PathID {key[1]} has conflicting filename and JSON names during move")
+                        tree["m_Name"] = after["name"]
+                    after["_edited_typetree_data"] = tree
+        elif before is not None and not after.get("source_node"):
+            after["source_node"] = before.get("source_node", "")
+
+        if (origin is not None and origin != key) or (prior_key and prior_key != key):
+            if after["type"] == "AssetBundle":
+                raise ValueError("The AssetBundle catalog cannot change its PathID")
+            path_id_changes.append({
+                "type": key[0], "from_path_id": (origin or prior_key)[1], "to_path_id": key[1],
+                "prior_path_id": (prior_key or origin)[1],
+                "restore_from_backup": origin is not None,
+                "from_name": (previous or before or {}).get("name", ""),
+                "to_name": after["name"], "source_node": after.get("source_node", ""),
+            })
+        if origin is None:
+            added.append({field: after[field] for field in ("type", "path_id", "name", "source_node")})
+        old_name = (before or previous or {}).get("name", "")
+        if (previous or before) and old_name != after["name"]:
+            renamed.append({"type": key[0], "path_id": key[1], "from": old_name, "to": after["name"]})
+        if before and before.get("sha256") != after["sha256"]:
+            modified_raw.append({"type": key[0], "path_id": key[1], "name": after["name"]})
+
+    deleted_records = {key: backup_records[key] for key in original_keys - live_origins}
+    for key in set(current_records) - prior_slots:
+        if key not in scanned_keys:
+            deleted_records[key] = current_records[key]
+    # A deleted backup slot may now be occupied by a different asset after
+    # a known move; deletion cleanup applies to unoccupied live identities only.
+    deleted = [
+        {"type": key[0], "path_id": key[1], "name": item.get("name", ""),
+         "source_node": item.get("source_node", "")}
+        for key, item in sorted(deleted_records.items())
+    ]
     return {
         "items": list(scanned.values()),
         "by_key": scanned,
         "original": backup_records,
         "current_records": current_records,
+        "assigned": assigned,
         "added": added,
         "deleted": deleted,
         "renamed": renamed,
@@ -1999,14 +2207,76 @@ def _renamed_catalog_key(key: str, old_name: str, new_name: str) -> str:
     return f"{directory}/{updated}" if directory else updated
 
 
+def _cab_basename(path) -> str:
+    return str(path).replace("\\", "/").rsplit("/", 1)[-1].casefold()
+
+
+def _deleted_targets_by_cab(environment, deleted_records) -> dict:
+    """Use the manifest identity, including assets not present in the backup."""
+    cabs = list(environment.assets)
+    names = {}
+    for cab in cabs:
+        names.setdefault(_cab_basename(cab.name), []).append(cab)
+    result = {}
+    for item in deleted_records:
+        name = item.get("source_node")
+        candidates = names.get(_cab_basename(name), []) if name else cabs
+        if len(candidates) != 1:
+            raise ValueError(
+                f"Cannot identify the serialized CAB of deleted PathID {item['path_id']} "
+                f"({name or 'missing source_node'})"
+            )
+        result.setdefault(id(candidates[0]), set()).add(int(item["path_id"]))
+    return result
+
+
+def _embedded_cab_resolver(environment):
+    """Map a PPtr FileID to an actual serialized sibling in this bundle only."""
+    # Restrict lookups to CABs with the same containing UnityFS, and do not
+    # guess if an embedded name is ambiguous.
+    siblings = {}
+    for cab in environment.assets:
+        parent = getattr(cab, "parent", None)
+        if parent is None:
+            continue
+        key = (id(parent), _cab_basename(cab.name))
+        if key in siblings and siblings[key] is not cab:
+            siblings[key] = None
+        else:
+            siblings[key] = cab
+
+    cache = {}
+
+    def targets(owner):
+        key = id(owner)
+        if key not in cache:
+            matches = {0: owner}
+            parent = getattr(owner, "parent", None)
+            if parent is not None:
+                for index, external in enumerate(owner.externals, start=1):
+                    candidate = siblings.get((id(parent), _cab_basename(external.path)))
+                    if candidate is not None:
+                        matches[index] = candidate
+            cache[key] = matches
+        return cache[key]
+
+    return targets
+
+
 def _sync_assetbundle_catalogs(
     environment,
     deleted_ids: set,
     added: List[dict],
     renamed: List[dict],
     compatibility: Optional[dict] = None,
+    *,
+    deleted_records: Optional[List[dict]] = None,
 ) -> dict:
-    existing_ids = {int(obj.path_id) for obj in environment.objects}
+    resolve_embedded = _embedded_cab_resolver(environment)
+    deleted_in_cab = (
+        _deleted_targets_by_cab(environment, deleted_records)
+        if deleted_records is not None else None
+    )
     renamed_by_id = {
         int(item["path_id"]): (item["from"], item["to"])
         for item in renamed
@@ -2021,16 +2291,24 @@ def _sync_assetbundle_catalogs(
         if reader.type.name != "AssetBundle":
             continue
         bundle = reader.read(False)
+        targets = resolve_embedded(reader.assets_file)
+
+        def points_to_deleted(pointer) -> bool:
+            file_id = int(pointer.file_id)
+            path_id = int(pointer.path_id)
+            if deleted_in_cab is None:
+                return file_id == 0 and path_id in deleted_ids
+            target = targets.get(file_id)
+            return target is not None and path_id in deleted_in_cab.get(id(target), ())
+
         old_preloads = list(bundle.m_PreloadTable)
         keep = [
             not (
-                int(pointer.file_id) == 0
-                and (
-                    int(pointer.path_id) in deleted_ids
-                    or (
-                        int(pointer.path_id)
-                        and int(pointer.path_id) not in existing_ids
-                    )
+                points_to_deleted(pointer)
+                or (
+                    int(pointer.file_id) == 0
+                    and int(pointer.path_id)
+                    and int(pointer.path_id) not in reader.assets_file.objects
                 )
             )
             for pointer in old_preloads
@@ -2058,16 +2336,31 @@ def _sync_assetbundle_catalogs(
         updated_entries = []
         for key, info in list(bundle.m_ContainerEntries):
             asset_id = int(info.asset.path_id)
-            if int(info.asset.file_id) == 0 and asset_id in deleted_ids:
+            if points_to_deleted(info.asset):
                 continue
             update_asset_info(info)
-            if asset_id in renamed_by_id:
+            if int(info.asset.file_id) == 0 and asset_id in renamed_by_id:
                 before, after = renamed_by_id[asset_id]
                 key = _renamed_catalog_key(key, before, after)
             updated_entries.append((key, info))
-        update_asset_info(bundle.m_MainAsset)
-        for _class_id, info in bundle.m_ClassCompatibility:
-            update_asset_info(info)
+
+        main_asset = bundle.m_MainAsset
+        if points_to_deleted(main_asset.asset):
+            main_asset.asset = _make_pointer(reader.assets_file, 0, main_asset.asset)
+            main_asset.preload_index = 0
+            main_asset.preload_size = 0
+        else:
+            update_asset_info(main_asset)
+
+        # AOV serializes the typed m_ClassCompatibility slot as
+        # m_newPathContainer (integer path hash -> AssetInfo). Leave retained
+        # keys and order intact while removing entries for deleted local assets.
+        kept_class_entries = []
+        for class_id, info in bundle.m_ClassCompatibility:
+            if not points_to_deleted(info.asset):
+                update_asset_info(info)
+                kept_class_entries.append((class_id, info))
+        bundle.m_ClassCompatibility = kept_class_entries
         bundle.m_ContainerEntries = updated_entries
         bundle.m_Container = dict(updated_entries)
         present = {
@@ -2398,43 +2691,65 @@ def _sync_sprite_atlases(
     }
 
 
-def _null_deleted_references(environment, deleted_ids: set) -> List[dict]:
-    """Clear remaining local PPtrs to deleted objects without inventing targets."""
-
+def _null_deleted_references(environment, deleted_records: List[dict]) -> List[dict]:
+    """Clear PPtrs to deleted assets in the owning CAB or embedded siblings."""
+    if not deleted_records:
+        return []
+    deleted_in_cab = _deleted_targets_by_cab(environment, deleted_records)
+    resolve_embedded = _embedded_cab_resolver(environment)
     changed = []
 
-    def visit(value, locations, location):
+    def visit(value, deleted_by_file, locations, location):
         if isinstance(value, dict):
             if "m_FileID" in value and "m_PathID" in value:
-                if (
-                    int(value["m_FileID"]) == 0
-                    and int(value["m_PathID"]) in deleted_ids
-                ):
+                if int(value["m_PathID"]) in deleted_by_file.get(int(value["m_FileID"]), ()):
                     locations.append(location)
+                    value["m_FileID"] = 0
                     value["m_PathID"] = 0
-                    return
+                return
             for key, child in value.items():
-                visit(child, locations, f"{location}.{key}")
+                visit(child, deleted_by_file, locations, f"{location}.{key}")
         elif isinstance(value, (list, tuple)):
             for index, child in enumerate(value):
-                visit(child, locations, f"{location}[{index}]")
+                visit(child, deleted_by_file, locations, f"{location}[{index}]")
 
+    cached = {}
     for obj in environment.objects:
+        # Their parallel arrays and preload ranges are managed by the
+        # specialized synchronizers, then checked by pointer validation.
         if obj.type.name in {"AssetBundle", "SpriteAtlas"}:
             continue
+        owner = obj.assets_file
+        if id(owner) not in cached:
+            deleted_by_file = {
+                file_id: deleted_in_cab[id(target)]
+                for file_id, target in resolve_embedded(owner).items()
+                if id(target) in deleted_in_cab
+            }
+            fmt = "i" if obj.version2 < 14 else "q"
+            markers = [
+                struct.pack(obj.reader.endian + "i" + fmt, file_id, path_id)
+                for file_id, ids in deleted_by_file.items()
+                for path_id in ids
+            ]
+            cached[id(owner)] = deleted_by_file, markers
+        deleted_by_file, markers = cached[id(owner)]
+        if not markers:
+            continue
         raw = bytes(obj.get_raw_data())
-        endian = obj.reader.endian
-        if not any(
-            struct.pack(endian + "q", int(path_id)) in raw
-            for path_id in deleted_ids
-        ):
+        plausible = any(marker in raw for marker in markers)
+        if obj.version2 >= 14 and not plausible:
             continue
         try:
             tree = obj.read_typetree()
-        except Exception:
+        except Exception as exc:
+            if plausible:
+                raise ValueError(
+                    f"Cannot verify asset deletion through {obj.type.name} {obj.path_id}"
+                ) from exc
             continue
         locations = []
-        visit(tree, locations, obj.type.name)
+        visit(tree, deleted_by_file, locations, obj.type.name)
         if locations:
             obj.save_typetree(tree)
             changed.append(
@@ -2451,82 +2766,80 @@ def _remap_path_id_references(
     environment,
     path_id_changes: List[dict],
 ) -> List[dict]:
-    """Redirect every readable PPtr after a user changes a file PathID."""
+    """Rebind PPtrs only when their FileID targets the moved asset's CAB."""
 
-    remap = {
-        int(item["from_path_id"]): int(item["to_path_id"])
-        for item in path_id_changes
-    }
-    if not remap:
+    if not path_id_changes:
         return []
-    changed = []
+    by_node = {}
+    for move in path_id_changes:
+        node = str(move["source_node"]).replace("\\", "/").rsplit("/", 1)[-1].casefold()
+        mapping = by_node.setdefault(node, {})
+        source = int(move.get("prior_path_id", move["from_path_id"]))
+        if source != move["to_path_id"]:
+            destination = mapping.setdefault(source, int(move["to_path_id"]))
+            if destination != move["to_path_id"]:
+                raise ValueError(f"Conflicting PathID reference mapping for {node}: {source}")
 
-    def remap_pointer(pointer) -> bool:
-        path_id = int(getattr(pointer, "path_id", 0))
-        if path_id not in remap:
-            return False
-        pointer.path_id = remap[path_id]
-        pointer._obj = None
-        pointer.index = -2
-        return True
+    def mapping_for_file(owner):
+        def node_name(path):
+            return str(path).replace("\\", "/").rsplit("/", 1)[-1].casefold()
+        mappings = {0: by_node.get(node_name(owner.name), {})}
+        for index, external in enumerate(owner.externals, start=1):
+            # Match the actual external serialized file name, not just its
+            # PathID. Never rewrite an unrelated external file's same ID.
+            mappings[index] = by_node.get(node_name(external.path), {})
+        return mappings
 
-    def visit(value, locations, location):
+    def visit(value, mappings, locations, location):
         if isinstance(value, dict):
             if "m_FileID" in value and "m_PathID" in value:
                 path_id = int(value["m_PathID"])
+                remap = mappings.get(int(value["m_FileID"]), {})
                 if path_id in remap:
                     value["m_PathID"] = remap[path_id]
                     locations.append(location)
-                    return
+                return
             for key, child in value.items():
-                visit(child, locations, f"{location}.{key}")
+                visit(child, mappings, locations, f"{location}.{key}")
         elif isinstance(value, (list, tuple)):
             for index, child in enumerate(value):
-                visit(child, locations, f"{location}[{index}]")
+                visit(child, mappings, locations, f"{location}[{index}]")
 
+    changed = []
+    cache = {}
     for obj in environment.objects:
+        owner = obj.assets_file
+        owner_key = id(owner)
+        if owner_key not in cache:
+            mappings = mapping_for_file(owner)
+            fmt = "i" if obj.version2 < 14 else "q"
+            markers = []
+            for file_id, remap in mappings.items():
+                for path_id in remap:
+                    markers.append(struct.pack(obj.reader.endian + "i" + fmt, file_id, path_id))
+            cache[owner_key] = mappings, markers
+        mappings, markers = cache[owner_key]
+        if not markers:
+            continue
+        raw = bytes(obj.get_raw_data())
+        # Old files may insert alignment between the two PPtr fields. Modern
+        # ones store the fields adjacent; prefilter those cheaply.
+        if obj.version2 >= 14 and not any(marker in raw for marker in markers):
+            continue
+        try:
+            tree = obj.read_typetree()
+        except Exception as exc:
+            if any(marker in raw for marker in markers):
+                raise ValueError(
+                    f"Cannot verify PathID migration through {obj.type.name} {obj.path_id}"
+                ) from exc
+            continue
         locations = []
-        if obj.type.name == "AssetBundle":
-            bundle = obj.read(False)
-            for index, pointer in enumerate(bundle.m_PreloadTable):
-                if remap_pointer(pointer):
-                    locations.append(f"m_PreloadTable[{index}]")
-            for index, (_key, info) in enumerate(bundle.m_ContainerEntries):
-                if remap_pointer(info.asset):
-                    locations.append(f"m_Container[{index}].asset")
-            if locations:
-                bundle.save()
-        elif obj.type.name == "SpriteAtlas":
-            atlas = obj.read(False)
-            for index, pointer in enumerate(atlas.m_PackedSprites):
-                if remap_pointer(pointer):
-                    locations.append(f"m_PackedSprites[{index}]")
-            for render_key, render_data in atlas.m_RenderDataMap.items():
-                if remap_pointer(render_data.texture):
-                    locations.append(
-                        f"m_RenderDataMap[{render_key!r}].texture"
-                    )
-                if remap_pointer(render_data.alphaTexture):
-                    locations.append(
-                        f"m_RenderDataMap[{render_key!r}].alphaTexture"
-                    )
-            if locations:
-                atlas.save()
-        else:
-            try:
-                tree = obj.read_typetree()
-            except Exception:
-                continue
-            visit(tree, locations, obj.type.name)
-            if locations:
-                obj.save_typetree(tree)
+        visit(tree, mappings, locations, obj.type.name)
         if locations:
+            obj.save_typetree(tree)
             changed.append(
-                {
-                    "type": obj.type.name,
-                    "path_id": int(obj.path_id),
-                    "locations": locations,
-                }
+                {"type": obj.type.name, "path_id": int(obj.path_id), "locations": locations}
             )
     return changed
 
@@ -2535,34 +2848,33 @@ def _validate_local_references(
     environment,
     object_path_ids: Optional[set] = None,
 ) -> List[dict]:
-    """Report local PPtrs whose target is absent from that serialized file."""
-
+    """Report absent targets in the owning CAB and known embedded siblings."""
     issues = []
+    resolve_embedded = _embedded_cab_resolver(environment)
 
-    def visit(value, local_ids, owner, location):
+    def visit(value, targets, owner, location):
         if isinstance(value, dict):
             if "m_FileID" in value and "m_PathID" in value:
                 file_id = int(value["m_FileID"])
                 path_id = int(value["m_PathID"])
-                if file_id == 0 and path_id and path_id not in local_ids:
+                target = targets.get(file_id)
+                if target is not None and path_id and path_id not in target.objects:
                     issues.append(
                         {
                             "owner_type": owner.type.name,
                             "owner_path_id": int(owner.path_id),
                             "location": location,
                             "missing_path_id": path_id,
+                            "file_id": file_id,
+                            "target_cab": target.name,
                         }
                     )
-                    return
+                return
             for key, child in value.items():
-                visit(
-                    child, local_ids, owner, f"{location}.{key}"
-                )
+                visit(child, targets, owner, f"{location}.{key}")
         elif isinstance(value, (list, tuple)):
             for index, child in enumerate(value):
-                visit(
-                    child, local_ids, owner, f"{location}[{index}]"
-                )
+                visit(child, targets, owner, f"{location}[{index}]")
 
     for obj in environment.objects:
         if (
@@ -2571,14 +2883,11 @@ def _validate_local_references(
             and obj.type.name not in {"AssetBundle", "SpriteAtlas"}
         ):
             continue
-        local_ids = {
-            int(item.path_id) for item in obj.assets_file.objects.values()
-        }
         try:
             tree = obj.read_typetree()
         except Exception:
             continue
-        visit(tree, local_ids, obj, obj.type.name)
+        visit(tree, resolve_embedded(obj.assets_file), obj, obj.type.name)
     return issues
 
 
@@ -2593,26 +2902,6 @@ def _apply_dynamic_project_objects(
         (item["type"], int(item["to_path_id"])): item
         for item in scan["path_id_changes"]
     }
-    for change in scan["path_id_changes"]:
-        old_key = (change["type"], int(change["from_path_id"]))
-        new_key = (change["type"], int(change["to_path_id"]))
-        obj = lookup.get(old_key)
-        if obj is None:
-            raise ValueError(
-                f"Backup is missing {change['type']} "
-                f"{change['from_path_id']} for PathID migration"
-            )
-        if int(change["to_path_id"]) in obj.assets_file.objects:
-            raise ValueError(
-                f"Cannot migrate {change['type']} {change['from_path_id']} "
-                f"to occupied PathID {change['to_path_id']}"
-            )
-        del obj.assets_file.objects[int(change["from_path_id"])]
-        obj.path_id = int(change["to_path_id"])
-        obj.assets_file.objects[int(change["to_path_id"])] = obj
-        obj.assets_file.mark_changed()
-        lookup.pop(old_key)
-        lookup[new_key] = obj
     deleted_ids = {int(item["path_id"]) for item in scan["deleted"]}
     if any(item["type"] == "AssetBundle" for item in scan["deleted"]):
         raise ValueError(
@@ -2629,22 +2918,53 @@ def _apply_dynamic_project_objects(
             deleted_sprites.append(detail)
         del obj.assets_file.objects[int(obj.path_id)]
         obj.assets_file.mark_changed()
+        lookup.pop((item["type"], int(item["path_id"])), None)
+
+    # Free every original slot first. Cycles (A ↔ B or A → B → C → A)
+    # can then be installed without an intermediate PathID or clobber.
+    detached = []
+    for change in scan["path_id_changes"]:
+        old_id, new_id = change["from_path_id"], change["to_path_id"]
+        if not change["restore_from_backup"] or old_id == new_id:
+            continue
+        old_key = (change["type"], old_id)
+        obj = lookup.pop(old_key, None)
+        if obj is None:
+            raise ValueError(f"Backup is missing {old_key} for PathID migration")
+        del obj.assets_file.objects[old_id]
+        detached.append((obj, new_id))
+    for obj, new_id in detached:
+        if new_id in obj.assets_file.objects:
+            raise ValueError(f"Cannot migrate {obj.type.name} to occupied PathID {new_id}")
+        obj.path_id = new_id
+        obj.assets_file.objects[new_id] = obj
+        obj.assets_file.mark_changed()
+        lookup[(obj.type.name, new_id)] = obj
 
     current = {}
-    original_keys = set(scan["original"])
     for item in scan["items"]:
         key = (item["type"], int(item["path_id"]))
         raw_path = os.path.join(project_dir, *item["raw"].split("/"))
         raw = open(raw_path, "rb").read()
-        if key in changed_by_new:
-            obj = lookup[key]
-            obj.set_raw_data(raw)
-        elif key in original_keys:
-            obj = lookup.get(key)
-            if obj is None:
-                raise ValueError(
-                    f"Backup is missing {item['type']} {item['path_id']}"
-                )
+        previous_record = scan["current_records"].get(scan["assigned"].get(key, key))
+        previous_record = previous_record or scan["original"].get(key)
+        if previous_record is None and key in changed_by_new:
+            previous_record = scan["original"].get(
+                (item["type"], int(changed_by_new[key]["from_path_id"]))
+            )
+        original_obj = lookup.get(key)
+        raw_digest = _sha256(raw)
+        expected_raw = previous_record.get("sha256") if previous_record else None
+        raw_and_json = (
+            expected_raw is not None and expected_raw != raw_digest
+            and "_edited_typetree_data" in item
+        )
+        if raw_and_json and original_obj is not None:
+            original_raw = original_obj.get_raw_data()
+        else:
+            original_raw = None
+        if original_obj is not None:
+            obj = original_obj
             obj.set_raw_data(raw)
         else:
             obj = _add_raw_object(environment, item, raw)
@@ -2658,6 +2978,14 @@ def _apply_dynamic_project_objects(
                         "source_node", ""
                     )
                     break
+        if raw_and_json:
+            item["_edited_typetree_data"] = _merge_project_typetree(
+                project_dir, obj, item["_edited_typetree_data"], expected_raw,
+                original_raw, managed_name=item["name"],
+            )
+        if (item.get("editable", "").lower().endswith(".json")
+                and (raw_digest != expected_raw or "_edited_typetree_data" in item)):
+            item["_reconcile_typetree"] = True
         current[key] = obj
     compatibility = manifest.get("runtime_compatibility")
     if compatibility:
@@ -2726,7 +3054,7 @@ def _apply_dynamic_project_objects(
         elif item["type"] == "TextAsset" and editable.lower().endswith(".bin"):
             edited_text_assets.append((obj, editable_path))
         elif editable.lower().endswith(".json"):
-            edited_typetrees.append((obj, editable_path))
+            edited_typetrees.append((obj, item["_edited_typetree_data"]))
         else:
             raise ValueError(
                 f"{item['type']} {item['path_id']}: cannot apply "
@@ -2735,6 +3063,33 @@ def _apply_dynamic_project_objects(
 
     items_by_key = {(item["type"], int(item["path_id"])): item for item in scan["items"]}
     modified_streams = set()
+
+    def previous_stream_hash(key):
+        move = changed_by_new.get(key)
+        if move:
+            previous = scan["current_records"].get(
+                (key[0], int(move.get("prior_path_id", move["from_path_id"])))
+            )
+            previous = previous or scan["original"].get(
+                (key[0], int(move["from_path_id"]))
+            )
+        else:
+            previous = scan["current_records"].get(key) or scan["original"].get(key)
+        return ((previous or {}).get("stream") or {}).get("payload_sha256")
+
+    for key, item in items_by_key.items():
+        if key[0] in {"AudioClip", "VideoClip"} and item.get("stream"):
+            item["_previous_media_payload_sha256"] = previous_stream_hash(key)
+
+    changed_texture_sidecars = {}
+    for key, item in items_by_key.items():
+        if key[0] != "Texture2D" or not item.get("stream"):
+            continue
+        digest = item["stream"].get("payload_sha256")
+        if digest and digest != previous_stream_hash(key):
+            changed_texture_sidecars[key] = digest
+            if item.get("editable", "").lower().endswith(".png"):
+                item["_reconcile_texture_png"] = True
 
     def remember_edited_texture(obj, item):
         descriptor = _stream_descriptor(obj)
@@ -2769,23 +3124,27 @@ def _apply_dynamic_project_objects(
         replace_texture_image(texture, image)
         texture.save()
         remember_edited_texture(obj, item)
+        key = ("Texture2D", int(obj.path_id))
+        sidecar_digest = changed_texture_sidecars.get(key)
+        if sidecar_digest is not None:
+            encoded = item.get("_edited_stream_payload")
+            if encoded is None or _sha256(encoded) != sidecar_digest:
+                raise ValueError(
+                    f"Texture2D PathID {obj.path_id}: conflicting PNG and .resS "
+                    "edits; keep one source or apply them in separate rebuilds"
+                )
+        if item.get("stream"):
+            item["_reconcile_texture_png"] = True
         modified_streams.add(int(obj.path_id))
     if edited_sprites:
         sprite_index = SpriteProjectIndex([environment])
-        original_records = {
-            (item["type"], int(item["path_id"])): item
-            for item in manifest.get("assets", [])
-        }
         for obj, editable_path in edited_sprites:
             binding = resolve_sprite_backing(obj, 0, sprite_index)
             for target in (binding["texture_reader"], binding["alpha_reader"]):
                 if target is None:
                     continue
                 key = ("Texture2D", int(target.path_id))
-                item = items_by_key[key]
-                baseline_hash = (original_records.get(key, {}).get("stream") or {}).get("payload_sha256")
-                current_hash = (item.get("stream") or {}).get("payload_sha256")
-                if int(target.path_id) not in modified_streams and baseline_hash and current_hash != baseline_hash:
+                if int(target.path_id) not in modified_streams and key in changed_texture_sidecars:
                     raise ValueError(
                         f"Sprite {obj.path_id}: backing Texture2D {target.path_id} "
                         "also has a changed resource sidecar. Apply those edits in separate rebuilds."
@@ -2809,31 +3168,23 @@ def _apply_dynamic_project_objects(
     for obj, editable_path in edited_meshes:
         replace_mesh_from_obj(obj, editable_path)
         synchronize_mesh_renderer_bounds([environment], obj)
-    for obj, editable_path in edited_typetrees:
-        with open(editable_path, "r", encoding="utf-8-sig") as handle:
-            tree = json.load(handle)
-        desired_name = next(
-            item["name"] for item in scan["items"]
-            if item["type"] == obj.type.name
-            and int(item["path_id"]) == int(obj.path_id)
-        )
-        if isinstance(tree, dict) and "m_Name" in tree:
-            tree["m_Name"] = desired_name
+    for obj, tree in edited_typetrees:
         obj.save_typetree(tree)
 
-    atlas_sync = _sync_sprite_atlases(
-        environment, deleted_sprites, scan["renamed"], scan["added"]
-    )
     remapped = _remap_path_id_references(
         environment, scan["path_id_changes"]
     )
-    nulled = _null_deleted_references(environment, deleted_ids)
+    atlas_sync = _sync_sprite_atlases(
+        environment, deleted_sprites, scan["renamed"], scan["added"]
+    )
+    nulled = _null_deleted_references(environment, scan["deleted"])
     catalog_sync = _sync_assetbundle_catalogs(
         environment,
         deleted_ids,
         scan["added"],
         scan["renamed"],
         compatibility=manifest.get("runtime_compatibility"),
+        deleted_records=scan["deleted"],
     )
     return {
         "textures": len(edited_images),
@@ -3091,11 +3442,26 @@ def _rebuild_stream_resources(
                     f"{item['path_id']}: {payload_path}"
                 )
             payload = open(payload_path, "rb").read()
+        payload_digest = _sha256(payload)
+        if ("_previous_media_payload_sha256" in item
+                and payload_digest != item["_previous_media_payload_sha256"]):
+            try:
+                clip = obj.read(False)
+                if key[0] == "AudioClip":
+                    update_audio_metadata(obj, clip, payload)
+                else:
+                    verify_video_replacement(clip, payload)
+            except ValueError as exc:
+                raise ValueError(
+                    f"{key[0]} PathID {key[1]}: cannot safely replace the .resS payload: "
+                    f"{exc}. Restore the original sidecar, or import a compatible "
+                    "whole asset from a donor AB so its metadata and payload stay together."
+                ) from exc
         expected_sha = stream.get("payload_sha256")
-        if expected_sha and _sha256(payload) != expected_sha:
+        if expected_sha and payload_digest != expected_sha:
             # A changed sidecar is an intentional asset edit. The current
             # content becomes the new source of truth and is re-indexed.
-            stream["payload_sha256"] = _sha256(payload)
+            stream["payload_sha256"] = payload_digest
         stream["size"] = len(payload)
         assets_file = obj.assets_file
         source_node = str(getattr(assets_file, "name", "") or "")
@@ -3290,6 +3656,34 @@ def _validate_stream_bindings(
     return issues
 
 
+def _canonical_project_path(current: str, desired: str) -> str:
+    if current == desired:
+        return current
+    if not os.path.lexists(desired):
+        os.replace(current, desired)
+        return desired
+    if (current.casefold() != desired.casefold()
+            or not os.path.samefile(current, desired)):
+        raise ValueError(f"Cannot canonicalize {current}; {desired} exists")
+    # A case-insensitive filesystem can report both paths as the same file.
+    # Move through a temporary name so a case-only rename is actually applied.
+    with tempfile.NamedTemporaryFile(
+        dir=os.path.dirname(current), prefix=".aov-name-", delete=False
+    ) as handle:
+        intermediate = handle.name
+    try:
+        os.replace(current, intermediate)
+    except BaseException:
+        os.unlink(intermediate)
+        raise
+    try:
+        os.replace(intermediate, desired)
+    except BaseException:
+        os.replace(intermediate, current)
+        raise
+    return desired
+
+
 def _canonicalize_project_files(
     project_dir: str, assets: List[dict]
 ) -> List[dict]:
@@ -3308,13 +3702,7 @@ def _canonicalize_project_files(
         desired_raw = os.path.join(
             os.path.dirname(raw_path), f"{desired_stem}.raw"
         )
-        if os.path.normcase(raw_path) != os.path.normcase(desired_raw):
-            if os.path.exists(desired_raw):
-                raise ValueError(
-                    f"Cannot canonicalize {raw_path}; {desired_raw} exists"
-                )
-            os.replace(raw_path, desired_raw)
-            raw_path = desired_raw
+        raw_path = _canonical_project_path(raw_path, desired_raw)
         item["raw"] = _relative(raw_path, project_dir)
         item["file_stem"] = desired_stem
         raw = open(raw_path, "rb").read()
@@ -3330,17 +3718,7 @@ def _canonicalize_project_files(
             desired_editable = os.path.join(
                 os.path.dirname(editable_path), f"{desired_stem}{extension}"
             )
-            if (
-                os.path.normcase(editable_path)
-                != os.path.normcase(desired_editable)
-            ):
-                if os.path.exists(desired_editable):
-                    raise ValueError(
-                        f"Cannot canonicalize {editable_path}; "
-                        f"{desired_editable} exists"
-                    )
-                os.replace(editable_path, desired_editable)
-                editable_path = desired_editable
+            editable_path = _canonical_project_path(editable_path, desired_editable)
             item["editable"] = _relative(editable_path, project_dir)
             item["editable_sha256"] = _sha256(
                 open(editable_path, "rb").read()
@@ -3353,17 +3731,7 @@ def _canonicalize_project_files(
             desired_payload = os.path.join(
                 os.path.dirname(payload_path), f"{desired_stem}.resS"
             )
-            if (
-                os.path.normcase(payload_path)
-                != os.path.normcase(desired_payload)
-            ):
-                if os.path.exists(desired_payload):
-                    raise ValueError(
-                        f"Cannot canonicalize {payload_path}; "
-                        f"{desired_payload} exists"
-                    )
-                os.replace(payload_path, desired_payload)
-                payload_path = desired_payload
+            payload_path = _canonical_project_path(payload_path, desired_payload)
             payload = open(payload_path, "rb").read()
             stream["payload"] = _relative(payload_path, project_dir)
             stream["size"] = len(payload)
@@ -3387,12 +3755,28 @@ def _synchronize_project_files(
     for item in assets:
         obj = objects[(item["type"], int(item["path_id"]))]
         raw_path = os.path.join(project_dir, *item["raw"].split("/"))
-        _write_bytes(raw_path, bytes(obj.get_raw_data()))
-        if "_refresh_editable_png" in item:
+        raw = bytes(obj.get_raw_data())
+        _write_bytes(raw_path, raw)
+        if item.get("_reconcile_texture_png"):
+            _write_bytes(
+                os.path.join(project_dir, *item["editable"].split("/")),
+                texture_preview_png(obj.read(False)),
+            )
+        elif "_refresh_editable_png" in item:
             _write_bytes(
                 os.path.join(project_dir, *item["editable"].split("/")),
                 item["_refresh_editable_png"],
             )
+        if (item.get("editable", "").lower().endswith(".json")
+                and (item.get("_reconcile_typetree") or "_refresh_editable_json" in item
+                     or _sha256(raw) != item.get("sha256"))):
+            # Refresh both representations from the final, verified AB, not the
+            # input JSON. Reference or catalog repair can change the tree too.
+            tree = obj.read_typetree()
+            _write_json(os.path.join(project_dir, *item["editable"].split("/")), tree)
+            base_path = _typetree_base_path(project_dir, _sha256(raw))
+            os.makedirs(os.path.dirname(base_path), exist_ok=True)
+            _write_bytes(base_path, raw)
         descriptor = _stream_descriptor(obj)
         if descriptor is not None and item.get("stream"):
             stream = item["stream"]
@@ -3433,12 +3817,28 @@ def _synchronize_project_files(
         node_info["flags"] = int(getattr(node, "flags", 0))
 
 
+def _project_history_state(manifest: dict) -> str:
+    """Snapshot the last persisted assets and internal resources, not the AB backup."""
+    # Canonical order is immaterial here. Take a value snapshot because
+    # synchronization updates node dictionaries and some stream descriptors.
+    return json.dumps({
+        "assets": sorted(
+            manifest.get("assets", []),
+            key=lambda item: (
+                item["type"], int(item["path_id"]), item.get("source_node", "")
+            ),
+        ),
+        "nodes": sorted(manifest.get("nodes", []), key=lambda node: node["name"]),
+    }, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+
+
 def _refresh_project_manifest(
     project_dir: str,
     manifest: dict,
     verified,
     edited: dict,
 ) -> None:
+    previous_state = _project_history_state(manifest)
     _synchronize_project_files(
         project_dir, manifest, verified, edited["assets"]
     )
@@ -3447,6 +3847,8 @@ def _refresh_project_manifest(
     )
     manifest["$schema"] = SCHEMA
     manifest["assets"] = assets
+    manifest.pop("path_id_moves", None)
+    manifest.pop("allow_independent_asset_changes", None)
     manifest["inventory"] = dict(
         sorted(Counter(obj.type.name for obj in verified.objects).items())
     )
@@ -3458,23 +3860,32 @@ def _refresh_project_manifest(
     ]
     validation = validate_sprite_atlas_relationships(verified)
     manifest["sprite_atlas_validation"] = validation
-    history = manifest.setdefault("change_history", [])
-    history.append(
-        {
-            "added": edited["added"],
-            "deleted": edited["deleted"],
-            "renamed": edited["renamed"],
-            "modified_raw": edited["modified_raw"],
-            "path_id_changes": edited.get("path_id_changes", []),
-            "remapped_references": edited.get(
-                "remapped_references", []
-            ),
-            "nulled_references": edited.get("nulled_references", []),
-            "atlas_sync": edited.get("atlas_sync", {}),
-            "catalog_sync": edited.get("catalog_sync", {}),
-            "stream_sync": edited.get("stream_sync", {}),
-        }
-    )
+    # Runtime reports are based on the immutable original AB. An existing
+    # edit or stream repair may therefore be reported on every rebuild, even
+    # after it has already been incorporated into the current project.
+    if _project_history_state(manifest) != previous_state:
+        history = manifest.setdefault("change_history", [])
+        history.append(
+            {
+                "added": edited["added"],
+                "deleted": edited["deleted"],
+                "renamed": edited["renamed"],
+                "modified_raw": edited["modified_raw"],
+                "edited_representations": {
+                    kind: edited[kind]
+                    for kind in ("textures", "sprites", "text_assets", "typetrees", "meshes")
+                    if edited.get(kind)
+                },
+                "path_id_changes": edited.get("path_id_changes", []),
+                "remapped_references": edited.get(
+                    "remapped_references", []
+                ),
+                "nulled_references": edited.get("nulled_references", []),
+                "atlas_sync": edited.get("atlas_sync", {}),
+                "catalog_sync": edited.get("catalog_sync", {}),
+                "stream_sync": edited.get("stream_sync", {}),
+            }
+        )
     _write_json(
         os.path.join(project_dir, "bundle_manifest.json"), manifest
     )
@@ -3524,23 +3935,29 @@ def _project_snapshot(root: str) -> dict:
     isjunction = getattr(os.path, "isjunction", lambda p: False)
     if os.path.islink(root) or isjunction(root):
         raise OSError(f"Cannot safely refresh a linked project: {root}")
+    def traversal_error(exc):
+        raise exc
+
     snapshot = {}
-    for folder, directories, files in os.walk(root):
+    for folder, directories, files in os.walk(root, onerror=traversal_error):
         for name in (*directories, *files):
             path = os.path.join(folder, name)
             if os.path.islink(path) or isjunction(path):
                 raise OSError(f"Cannot safely refresh a project containing a link: {path}")
             st = os.stat(path)
-            snapshot[_relative(path, root)] = (st.st_ino, st.st_mtime_ns, st.st_size)
+            snapshot[_relative(path, root)] = (
+                st.st_dev, st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size,
+            )
     return snapshot
 
 
-def _stage_project_refresh(project_dir: str, manifest: dict, verified, edited: dict) -> str | None:
+def _stage_project_refresh(project_dir: str, manifest: dict, verified, edited: dict, baseline) -> str | None:
     """Return a writeback warning without invalidating the already verified AB."""
     stage_root = None
     preserve_backup = False
     try:
-        baseline = _project_snapshot(project_dir)
+        if _project_snapshot(project_dir) != baseline:
+            raise OSError("The source project changed during rebuild; no project changes were applied")
         stage_root = tempfile.mkdtemp(prefix=".aov-project-", dir=os.path.dirname(project_dir))
         staged = os.path.join(stage_root, "updated")
         previous = os.path.join(stage_root, "previous")
@@ -3554,6 +3971,10 @@ def _stage_project_refresh(project_dir: str, manifest: dict, verified, edited: d
         preserve_backup = True
         os.replace(project_dir, previous)
         try:
+            # Close the gap between the last check and moving the original
+            # directory out of the way. Restore it if an editor wrote meanwhile.
+            if _project_snapshot(previous) != baseline:
+                raise OSError("The source project changed during refresh; no changes were applied")
             os.replace(staged, project_dir)
         except BaseException as install_error:
             try:
@@ -3565,6 +3986,17 @@ def _stage_project_refresh(project_dir: str, manifest: dict, verified, edited: d
                 )
             preserve_backup = False
             raise
+        # An already-open editor may still write into the now-moved original.
+        # If observed, preserve both versions rather than deleting new work.
+        try:
+            original_changed = _project_snapshot(previous) != baseline
+        except OSError:
+            original_changed = True
+        if original_changed:
+            return (
+                "The source project changed during the final writeback; "
+                f"the original containing those changes is retained at: {previous}"
+            )
         preserve_backup = False
     except Exception as exc:
         return str(exc) or type(exc).__name__
@@ -3590,7 +4022,6 @@ def rebuild_bundle_project(
 
     project_dir = os.path.abspath(project_dir)
     output_path = os.path.abspath(output_path)
-    manifest = _load_manifest(project_dir)
     project_root = os.path.normcase(os.path.realpath(project_dir))
     output_real = os.path.normcase(os.path.realpath(output_path))
     try:
@@ -3599,15 +4030,23 @@ def rebuild_bundle_project(
         output_is_internal = False
     if output_is_internal:
         raise ValueError("Choose an output AB outside the exported project directory")
-    backup = os.path.join(
-        project_dir, *manifest["source"]["backup"].split("/")
-    )
-    if not os.path.isfile(backup):
-        raise ValueError(
-            f"Bundle project backup is missing: {backup}"
+    output_baseline = rebuild_output_snapshot(output_path)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with reserve_project_output(output_path):
+        return _rebuild_reserved_project(
+            project_dir, output_path, output_baseline,
+            packer, optimize_atlas_textures,
         )
-    environment = UnityPy_AOV.load(backup)
+
+
+def _rebuild_reserved_project(
+    project_dir, output_path, output_baseline, packer, optimize_atlas_textures,
+) -> Dict[str, object]:
+    baseline = _project_snapshot(project_dir)
+    manifest = _load_manifest(project_dir)
+    environment = _load_verified_project_backup(project_dir, manifest)
     bundle = environment.file
+    _validate_project_object_identity(environment)
     _restore_resource_nodes(bundle, project_dir, manifest)
     _install_imported_types(environment, manifest)
     edited = _apply_project_objects(
@@ -3743,20 +4182,21 @@ def rebuild_bundle_project(
                 verified_stream_issues[:8], ensure_ascii=False
             )
         )
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(dir=os.path.dirname(output_path), prefix=".aov-", delete=False) as handle:
             temporary = handle.name
             handle.write(data)
-        os.replace(temporary, output_path)
+        if _project_snapshot(project_dir) != baseline:
+            raise OSError("The source project changed during rebuild; no output or project changes were applied")
+        publish_rebuild_output(temporary, output_path, output_baseline)
     finally:
         if temporary and os.path.exists(temporary):
             os.unlink(temporary)
     project_sync_warning = None
     project_sync_status = "not_required"
     if manifest.get("$schema") != SCHEMA_V1:
-        project_sync_warning = _stage_project_refresh(project_dir, manifest, verified, edited)
+        project_sync_warning = _stage_project_refresh(project_dir, manifest, verified, edited, baseline)
         project_sync_status = "warning" if project_sync_warning else "updated"
     return {
         "path": output_path,
