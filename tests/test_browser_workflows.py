@@ -24,6 +24,7 @@ class Browser(AssetBrowser):
         self.paths=[str(source)];self.env_list=[UnityPy_AOV.load(str(source))]
         self.target=next(iter(self.env_list[0].objects));self.window=None
         self.loading=False;self.operation_busy=False;self.modified={};self.edit_revision=0
+        self.texture_preview_overrides={};self.sprite_preview_overrides={}
         self.animation_project=None;self.effect_project=None;self.animation_model=None
         self.input_path=str(source);self.is_directory=False
         self.save_button=Control();self.fingerprint_save_button=Control();self.progress=Control()
@@ -166,3 +167,123 @@ def test_dump_rename_refreshes_visible_name_size_and_search(browser):
     assert updated.name=='renamed_mesh'
     assert updated.byte_size==obj.byte_size
     assert 'renamed_mesh' in updated.search_text
+
+
+@pytest.mark.parametrize("replacement_format", ["raw", "dump"])
+@pytest.mark.parametrize("streamed", [False, True])
+def test_texture_later_serialized_edit_replaces_png_preview_and_export(
+    tmp_path, monkeypatch, replacement_format, streamed,
+):
+    from io import BytesIO
+    from PIL import Image
+    from AssetbundleUtils.PreviewWorker import preview_worker
+    from tests.test_bundle_project_compatibility import texture_bundle
+
+    source = texture_bundle(tmp_path)
+    env = UnityPy_AOV.load(str(source))
+    env.assets[0].objects.pop(207)
+    reader = env.assets[0].objects[206]
+    if replacement_format == "dump":
+        # The fixture serializes the runtime 2022.3 Texture2D layout, while
+        # this stock fallback schema has the older mipmap flag/no group name.
+        # Adapt just these fixture nodes (the Dump code itself isn't mocked).
+        from copy import copy
+        from AssetbundleUtils.UnityPy_AOV.files import ObjectReader
+        original_nodes = ObjectReader.get_typetree_nodes
+        def runtime_nodes(obj, nodes=None):
+            result = original_nodes(obj, nodes)
+            if obj.type.name != "Texture2D":
+                return result
+            result = list(result)
+            start = next(i for i, n in enumerate(result) if n.m_Name == "m_Name")
+            limit = next(i for i, n in enumerate(result) if n.m_Name == "m_IgnoreMasterTextureLimit")
+            flag = copy(result[limit])
+            flag.m_Name = "m_IgnoreMipmapLimit"
+            flag.m_MetaFlag |= 0x4000
+            group = [copy(n) for n in result[start:start + 4]]
+            group[0].m_Name = "m_MipmapLimitGroupName"
+            result[limit:limit + 1] = [flag, *group]
+            return result
+        monkeypatch.setattr(ObjectReader, "get_typetree_nodes", runtime_nodes)
+    texture = reader.read(False)
+    red, green, blue = (230, 10, 20, 255), (20, 230, 30, 255), (20, 30, 230, 255)
+    if not streamed:
+        texture.image_data = bytes(red) * 4
+        texture.save()
+    source.write_bytes(env.file.save("lz4"))
+    texture.m_Name = "replacement"
+    if not streamed:
+        texture.image_data = bytes(blue) * 4
+    texture.save()
+    replacement = tmp_path / ("replacement.dat" if replacement_format == "raw" else "replacement.json")
+    if replacement_format == "raw":
+        replacement.write_bytes(env.assets[0].objects[206].get_raw_data())
+    else:
+        export_typetree_dump(env.assets[0].objects[206], replacement)
+
+    png = tmp_path / "green.png"
+    Image.new("RGBA", (2, 2), green).save(png)
+    b = Browser(source)
+    b.target = b.env_list[0].assets[0].objects[206]
+    class IdleWorker:
+        def is_alive(self): return True
+    b.preview_enabled, b.preview_generation, b.closed = True, 1, False
+    b.preview_latest_generation = b.effect_root = None
+    b.PREVIEW_PROCESS_COUNT = 1
+    b.preview_processes = [IdleWorker()]
+    b.preview_requests = [queue.Queue()]
+    monkeypatch.setattr(ui, "show_dialog", lambda *args, **kwargs: True)
+
+    def pixel(image_input):
+        with Image.open(image_input) as image:
+            return image.convert("RGBA").getpixel((0, 0))
+
+    def verify_images(folder, color):
+        output = tmp_path / folder
+        output.mkdir()
+        monkeypatch.setattr(ui, "askdirectory", lambda *args, **kwargs: str(output))
+        b.export_texture()
+        b.finish()
+        assert pixel(next(output.glob("*.png"))) == color
+        b._send_preview_request(1, 0, b.target)
+        results = queue.Queue()
+        requests = b.preview_requests[0]
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(preview_worker, requests, results, 0)
+            try:
+                _, kind, payload, err, _ = results.get(timeout=5)
+            finally:
+                requests.put(None)
+                future.result(timeout=5)
+        assert (kind, err) == ("image", None)
+        assert pixel(BytesIO(payload)) == color
+
+    try:
+        monkeypatch.setattr(ui, "askopenfile", lambda *args, **kwargs: str(png))
+        b.import_texture()
+        b.finish()
+        assert (0, 206) in b.texture_preview_overrides
+        verify_images("before", green)
+
+        monkeypatch.setattr(ui, "askopenfile", lambda *args, **kwargs: str(replacement))
+        if replacement_format == "raw":
+            b.import_raw()
+        else:
+            b.import_dump()
+        b.finish()
+        assert b.target.read(False).m_Name == "replacement"
+        # With a stream, RAW/Dump contains a locator, not image bytes. Keep
+        # the pixels edited in the live .resS, not the original disk pixels.
+        expected = green if streamed else blue
+        assert ((0, 206) in b.texture_preview_overrides) == streamed
+        verify_images("after", expected)
+
+        saved = tmp_path / "saved"
+        saved.mkdir()
+        monkeypatch.setattr(ui, "askdirectory", lambda *args, **kwargs: str(saved))
+        b.save_bundles()
+        assert b.finish()[2] is None
+        result = UnityPy_AOV.load(str(saved / source.name))
+        assert result.assets[0].objects[206].read(False).image.getpixel((0, 0)) == expected
+    finally:
+        b.executor.shutdown()
