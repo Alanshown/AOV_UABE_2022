@@ -31,11 +31,11 @@ def test_export_and_rebuild_asset_name_with_original_non_utf8_bytes(tmp_path):
     exported = project.export_bundle_project(str(source), str(tmp_path / "projects"))
     root = Path(exported["path"])
     manifest = project._load_manifest(str(root))
-    assert "\\udc8f\\udcdd" in Path(exported["manifest"]).read_text()
-    assert "凡恩-🐉" in Path(exported["manifest"]).read_text()
+    assert "\\udc8f\\udcdd" in Path(exported["manifest"]).read_text(encoding="utf-8")
+    assert "凡恩-🐉" in Path(exported["manifest"]).read_text(encoding="utf-8")
     assert manifest["assets"][0]["name"].encode("utf-8", "surrogateescape") == name_bytes
     for json_path in root.rglob(project.ASSET_INDEX_JSON):
-        assert json.loads(json_path.read_text())["assets"][0]["name"] == name
+        assert json.loads(json_path.read_text(encoding="utf-8"))["assets"][0]["name"] == name
     for csv_path in root.rglob(project.ASSET_INDEX_CSV):
         with csv_path.open(encoding="utf-8-sig", newline="") as handle:
             assert r"凡恩-🐉\udc8f\udcdd" in next(csv.DictReader(handle))["name"]
@@ -58,7 +58,7 @@ def test_export_failure_never_publishes_partial_project(tmp_path, monkeypatch):
     previous = root / "input"
     previous.mkdir(parents=True)
     marker = previous / "bundle_manifest.json"
-    marker.write_text("already there")
+    marker.write_text("already there", encoding="utf-8")
     original = project._write_asset_indexes
 
     def fail_after_index(directory, manifest):
@@ -70,7 +70,7 @@ def test_export_failure_never_publishes_partial_project(tmp_path, monkeypatch):
     with pytest.raises(OSError, match="index failure"):
         project.export_bundle_project(str(source), str(root))
     assert list(root.iterdir()) == [previous]
-    assert marker.read_text() == "already there"
+    assert marker.read_text(encoding="utf-8") == "already there"
     monkeypatch.setattr(project, "_write_asset_indexes", original)
     info = project.export_bundle_project(str(source), str(root))
     assert Path(info["path"]) == root / "input_1"
@@ -82,7 +82,7 @@ def test_json_failed_write_retains_previous_document(tmp_path):
     project._write_json(str(output), {"intact": True})
     with pytest.raises(TypeError):
         project._write_json(str(output), {"bad": object()})
-    assert json.loads(output.read_text()) == {"intact": True}
+    assert json.loads(output.read_text(encoding="utf-8")) == {"intact": True}
     assert list(tmp_path.iterdir()) == [output]
 
 
@@ -248,7 +248,7 @@ def test_standalone_dump_roundtrips_escaped_name(tmp_path):
     mesh.save_typetree(t)
     path = tmp_path / "mesh.dump.json"
     export_typetree_dump(mesh, path)
-    doc = json.loads(path.read_text())
+    doc = json.loads(path.read_text(encoding="utf-8"))
     assert doc["tree"]["m_Name"] == t["m_Name"]
     assert "凡恩" in _safe_filename(t["m_Name"])
     _safe_filename(t["m_Name"]).encode("utf-8")
