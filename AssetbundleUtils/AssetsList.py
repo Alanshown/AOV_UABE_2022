@@ -31,7 +31,7 @@ from AssetbundleUtils.AssetBundleMetadata import (
 )
 from AssetbundleUtils.BundleProject import (
     export_bundle_project, rebuild_bundle_project,
-    repair_sprite_atlas_preloads,
+    recover_unambiguous_texture_streams, repair_sprite_atlas_preloads,
 )
 from AssetbundleUtils.MeshImport import (
     replace_mesh_from_obj, validate_mesh_payload, synchronize_mesh_renderer_bounds,
@@ -2970,21 +2970,27 @@ class AssetBrowser:
             )
 
         def success(info):
-            show_dialog(
-                self.window,
-                tr("bundle_project_rebuilt_title"),
-                tr(
-                    "bundle_project_rebuilt_body",
-                    assets=info["assets"],
-                    added=len(info.get("added_assets", [])),
-                    deleted=len(info.get("deleted_assets", [])),
-                    renamed=len(info.get("renamed_assets", [])),
-                    optimized=len(info["optimized_textures"]),
-                    repaired=len(info["added_preload_path_ids"]),
-                    bytes=info["bytes"],
-                    path=info["path"],
-                ),
+            body = tr(
+                "bundle_project_rebuilt_body",
+                assets=info["assets"],
+                added=len(info.get("added_assets", [])),
+                deleted=len(info.get("deleted_assets", [])),
+                renamed=len(info.get("renamed_assets", [])),
+                optimized=len(info["optimized_textures"]),
+                repaired=len(info["added_preload_path_ids"]),
+                bytes=info["bytes"],
+                path=info["path"],
             )
+            warning = info.get("project_sync_warning")
+            if warning:
+                show_dialog(
+                    self.window,
+                    tr("bundle_project_sync_warning_title"),
+                    body + "\n\n" + tr("bundle_project_sync_warning_body", error=warning),
+                    "warning",
+                )
+            else:
+                show_dialog(self.window, tr("bundle_project_rebuilt_title"), body)
 
         self._submit_operation("rebuild_bundle_project", worker, success)
 
@@ -3142,6 +3148,7 @@ class AssetBrowser:
             source_bundle = getattr(
                 env, "file", next(iter(env.files.values()))
             )
+            recover_unambiguous_texture_streams(env)
             repair_sprite_atlas_preloads(env)
             # AssetBundle block compression is lossless.  Do not silently
             # transcode RGBA32 atlases to ETC2 here: that makes the output

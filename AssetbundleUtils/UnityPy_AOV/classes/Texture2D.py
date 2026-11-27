@@ -47,7 +47,8 @@ class Texture2D(Texture):
 
     @property
     def image_data(self):
-        if not self._image_data and self.m_StreamData is not None:
+        if (not self._image_data and self.m_StreamData is not None
+                and self.m_StreamData.size > 0):
             self._image_data = get_resource_data(
                 self.m_StreamData.path,
                 self.assets_file,
