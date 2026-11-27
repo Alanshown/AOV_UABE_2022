@@ -307,6 +307,8 @@ class Launcher:
         ).pack(pady=(13, 0))
 
     def _register_drop_targets(self):
+        if not getattr(self.root, "TkdndVersion", None):
+            return
         for widget in (self.root, self.drop_overlay):
             widget.drop_target_register(DND_FILES)
             widget.dnd_bind("<<DropEnter>>", self._on_drop_enter)
@@ -468,13 +470,30 @@ class Launcher:
         self.root.destroy()
 
 
+class AppRoot(tk.Tk, TkinterDnD.DnDWrapper):
+    """Provide TkDND widget methods without making extension load mandatory."""
+
+
+def create_app_root():
+    """A missing optional TkDND plugin must not disable the file picker."""
+    root = AppRoot()
+    root.TkdndVersion = None
+    try:
+        attach_tkdnd = getattr(TkinterDnD, "require", None) or TkinterDnD._require
+        root.TkdndVersion = attach_tkdnd(root)
+    except (RuntimeError, tk.TclError) as exc:
+        if sys.stderr is not None:
+            print(f"Drag and drop disabled: {exc}", file=sys.stderr)
+    return root
+
+
 def main():
     multiprocessing.freeze_support()
     if len(sys.argv) == 4 and sys.argv[1] == "--sample-fbx-worker":
         from AssetbundleUtils.FbxImportWorker import worker_main
         worker_main(*sys.argv[2:])
         return
-    root = TkinterDnD.Tk()
+    root = create_app_root()
     Launcher(root)
     root.mainloop()
 
