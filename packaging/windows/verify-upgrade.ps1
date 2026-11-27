@@ -14,13 +14,13 @@ $current = 'AOV_UABE_2022'
 $defaultInstall = Join-Path $env:LOCALAPPDATA 'Programs/AOV_UABE_2022'
 $programs = [Environment]::GetFolderPath('Programs')
 $desktop = [Environment]::GetFolderPath('DesktopDirectory')
-$legacyStart = Join-Path $programs 'AOV Old Custom Menu\AOV UABE 2022.lnk'
-$legacyDesktop = Join-Path $desktop 'AOV UABE 2022.lnk'
-$currentStart = Join-Path $programs 'AOV_UABE_2022.lnk'
 $appExe = 'AOV_UABE_2022.exe'
 $shell = New-Object -ComObject WScript.Shell
 
-function PathKey([string]$path) { [IO.Path]::GetFullPath($path).TrimEnd('\') }
+function PathKey([string]$path) {
+    if ([string]::IsNullOrWhiteSpace($path)) { throw "Missing path: $((Get-PSCallStack)[1].Location)" }
+    [IO.Path]::GetFullPath($path).TrimEnd('\')
+}
 function AssertEqual([string]$actual, [string]$expected, [string]$label) {
     if ($actual -ne $expected) { throw "${label}: got <$actual>, expected <$expected>" }
 }
@@ -29,6 +29,7 @@ function RegistrySubkey([string]$identity) {
 }
 function CheckInstall([string]$identity, [string]$destination, [string]$version) {
     $entry = Get-ItemProperty -LiteralPath (RegistrySubkey $identity)
+    Write-Host "Registered <${identity}>: $($entry.DisplayVersion); App Path <$($entry.'Inno Setup: App Path')>; icon group <$($entry.'Inno Setup: Icon Group')>"
     AssertEqual (PathKey $entry.'Inno Setup: App Path') (PathKey $destination) 'Registered install path'
     AssertEqual $entry.DisplayVersion $version 'Registered version'
     AssertEqual (Get-Item -LiteralPath (Join-Path $destination $appExe)).VersionInfo.ProductVersion $version 'Installed EXE version'
@@ -42,7 +43,26 @@ function RunSetup([string]$exe,[string]$label,[string[]]$extra=@()) {
     $log = Join-Path $artifactPaths "$label.log"
     $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOCANCEL', "/LOG=`"$log`"") + $extra
     $p = Start-Process -FilePath $exe -ArgumentList $arguments -Wait -PassThru
+    if (Test-Path $log) {
+        Select-String -Path $log -Pattern 'Creating the icon|\.lnk|Previous installation found|Existing installation' | ForEach-Object { Write-Host $_.Line }
+    }
     if ($p.ExitCode -ne 0) { Get-Content $log -Tail 65; throw "$label returned exit code $($p.ExitCode)" }
+}
+function FindLink([string]$root,[string]$destination,[string]$label) {
+    $target = PathKey (Join-Path $destination $appExe)
+    $matchesFound = @(
+        if (Test-Path -LiteralPath $root -PathType Container) {
+            Get-ChildItem -LiteralPath $root -Filter '*.lnk' -File -Recurse | ForEach-Object {
+                $lnk = $shell.CreateShortcut($_.FullName)
+                if ($lnk.TargetPath -and (PathKey $lnk.TargetPath) -eq $target) { $_.FullName }
+            }
+        }
+    )
+    if ($matchesFound.Count -ne 1) {
+        throw "Expected one $label shortcut for <$target> under <$root>, got $($matchesFound.Count): $matchesFound"
+    }
+    Write-Host "Found ${label}: $($matchesFound[0])"
+    return $matchesFound[0]
 }
 function CheckLink([string]$link,[string]$destination) {
     if (!(Test-Path -LiteralPath $link -PathType Leaf)) { throw "Missing shortcut <$link>" }
@@ -69,11 +89,11 @@ DownloadPinned "$release/latest2.1/AOV_UABE_2022-2.3.6-Setup-x64.exe" $legacySet
 $legacyPath = Join-Path $work 'Legacy nondefault dir'
 RunSetup $legacySetup 'upgrade-1-legacy-setup' @("/DIR=`"$legacyPath`"", '/GROUP="AOV Old Custom Menu"', '/TASKS=desktopicon', '/LANG=english')
 $before = CheckInstall $old $legacyPath '2.3.6'
-# Verify the actual old shortcuts exist. They predate the new setup.
-foreach($lnk in @($legacyStart,$legacyDesktop)) {
-    AssertEqual (PathKey ($shell.CreateShortcut($lnk).TargetPath)) (PathKey (Join-Path $legacyPath $appExe)) 'Legacy shortcut EXE'
-    DisturbLink $lnk $legacyPath
-}
+# Discover the links actually written by 2.3.6, independent of shell folder
+# redirection or how the old version normalized its program group name.
+$legacyStart = FindLink $programs $legacyPath 'legacy Start Menu'
+$legacyDesktop = FindLink $desktop $legacyPath 'legacy Desktop'
+foreach($lnk in @($legacyStart,$legacyDesktop)) { DisturbLink $lnk $legacyPath }
 $marker = Join-Path $legacyPath 'my-project-user-note.txt'
 [IO.File]::WriteAllText($marker,'keep user file')
 RunSetup $candidate 'upgrade-2-legacy-to-24'
@@ -108,12 +128,15 @@ if ($baseline -eq $baselineSetup) {
 }
 RunSetup $baseline 'upgrade-4-current-24-setup' @("/DIR=`"$currentPath`"")
 $currentBefore = CheckInstall $current $currentPath '2.4'
+$currentStart = FindLink $programs $currentPath '2.4 Start Menu'
 CheckLink $currentStart $currentPath
 DisturbLink $currentStart $currentPath
 
 $untouchedLegacyPath = Join-Path $work 'Legacy side-by-side nondefault dir'
 RunSetup $legacySetup 'upgrade-5-side-by-side-legacy-setup' @("/DIR=`"$untouchedLegacyPath`"", '/GROUP="AOV Old Custom Menu"', '/TASKS=desktopicon', '/LANG=english')
 $null = CheckInstall $old $untouchedLegacyPath '2.3.6'
+$legacyStart = FindLink $programs $untouchedLegacyPath 'side-by-side Start Menu'
+$legacyDesktop = FindLink $desktop $untouchedLegacyPath 'side-by-side Desktop'
 $legacyHash = (Get-FileHash (Join-Path $untouchedLegacyPath $appExe) -Algorithm SHA256).Hash
 $legacyLinks = @{}
 foreach ($link in @($legacyStart,$legacyDesktop)) { $legacyLinks[$link] = (Get-FileHash -LiteralPath $link -Algorithm SHA256).Hash }

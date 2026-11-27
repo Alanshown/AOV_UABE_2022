@@ -2,7 +2,10 @@
 param()
 $ErrorActionPreference = 'Stop'
 Set-Location (Resolve-Path (Join-Path $PSScriptRoot '../..'))
-$install = & (Join-Path $PSScriptRoot "verify-upgrade.ps1")
+try { $install = & (Join-Path $PSScriptRoot "verify-upgrade.ps1") } catch {
+    Write-Host $_.ScriptStackTrace
+    throw
+}
 $exe = Get-Item (Join-Path $install 'AOV_UABE_2022.exe')
 if ($exe.VersionInfo.ProductVersion -ne '2.4') { throw 'Installed EXE is not version 2.4' }
 Add-Type -AssemblyName System.Drawing
