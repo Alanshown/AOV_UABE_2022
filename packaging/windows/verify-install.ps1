@@ -2,10 +2,7 @@
 param()
 $ErrorActionPreference = 'Stop'
 Set-Location (Resolve-Path (Join-Path $PSScriptRoot '../..'))
-$setup = (Resolve-Path './artifacts/AOV_UABE_2022-2.4-Setup-x64.exe').Path
-$install = Join-Path $env:TEMP ('aov-uabe-install-' + [guid]::NewGuid())
-$installerProcess = Start-Process -FilePath $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=`"$install`"") -PassThru -Wait
-if ($installerProcess.ExitCode -ne 0) { throw "Installer returned $($installerProcess.ExitCode)" }
+$install = & (Join-Path $PSScriptRoot "verify-upgrade.ps1")
 $exe = Get-Item (Join-Path $install 'AOV_UABE_2022.exe')
 if ($exe.VersionInfo.ProductVersion -ne '2.4') { throw 'Installed EXE is not version 2.4' }
 Add-Type -AssemblyName System.Drawing
