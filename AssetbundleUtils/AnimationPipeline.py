@@ -2186,6 +2186,108 @@ def _component_values(value, names: str) -> Tuple[float, ...]:
     return tuple(float(getattr(value, name)) for name in names)
 
 
+def _sample_fbx_transforms(fbx_path, rate, target_names, transform_ids):
+    """Sample native FBX objects in a disposable helper process only."""
+    import ufbx
+
+    with ufbx.load_file(os.path.abspath(fbx_path)) as scene:
+        if not scene.anim_stacks:
+            raise ValueError("The FBX does not contain an animation stack")
+        stack = scene.anim_stacks[0]
+        anim = stack.anim
+        begin = float(stack.time_begin)
+        end = float(stack.time_end)
+        duration = max(0.0, end - begin)
+        if duration <= 0.0:
+            raise ValueError("The FBX animation has no playable duration")
+
+        scene_nodes = []
+        for index in range(len(scene.nodes)):
+            node = scene.nodes[index]
+            scene_nodes.append((int(node.element_id), str(node.name), node))
+        baked = ufbx.bake_anim(
+            scene, anim, resample_rate=rate,
+            key_reduction_enabled=False, bake_transform_props=True,
+        )
+        try:
+            animated_ids = {
+                int(baked.nodes[index].element_id)
+                for index in range(len(baked.nodes))
+            }
+        finally:
+            baked.free()
+
+        used_targets: Set[int] = set()
+        animated_pairs = []
+        for element_id, node_name, node in scene_nodes:
+            if element_id not in animated_ids:
+                continue
+            simple_name = node_name.rsplit("|", 1)[-1].rsplit(":", 1)[-1]
+            choices = [
+                transform_id for transform_id in target_names.get(simple_name, [])
+                if transform_id not in used_targets
+            ]
+            if not choices:
+                continue
+            if len(choices) > 1:
+                raise ValueError(f"Ambiguous animation node name {simple_name!r}; use unique bone names")
+            transform_id = choices[0]
+            used_targets.add(transform_id)
+            animated_pairs.append((transform_id, node))
+
+        if not animated_pairs:
+            raise ValueError(
+                "No animated FBX node names match the selected model hierarchy"
+            )
+        order = {path_id: index for index, path_id in enumerate(transform_ids)}
+        animated_pairs.sort(key=lambda pair: order[pair[0]])
+        frame_count = max(2, int(math.ceil(duration * rate)) + 1)
+        curve_count = len(animated_pairs) * 10
+        dense_values: List[float] = []
+        if frame_count * curve_count > 4_000_000:
+            raise ValueError("FBX animation exceeds the supported sampling size")
+        previous_rotations: Dict[int, Tuple[float, float, float, float]] = {}
+
+        for frame_index in range(frame_count):
+            time_value = min(end, begin + frame_index / rate)
+            frame_values: List[float] = []
+            for transform_id, node in animated_pairs:
+                transform = node.evaluate_transform(anim, time_value)
+                tx, ty, tz = _component_values(transform.translation, "xyz")
+                qx, qy, qz, qw = quaternion_normalize(
+                    _component_values(transform.rotation, "xyzw")
+                )
+                unity_rotation = (qx, -qy, -qz, qw)
+                previous = previous_rotations.get(transform_id)
+                if previous and sum(a * b for a, b in zip(previous, unity_rotation)) < 0.0:
+                    unity_rotation = tuple(-value for value in unity_rotation)
+                previous_rotations[transform_id] = unity_rotation
+                sx, sy, sz = _component_values(transform.scale, "xyz")
+                frame_values.extend((
+                    -tx, ty, tz,
+                    unity_rotation[0], unity_rotation[1],
+                    unity_rotation[2], unity_rotation[3],
+                    sx, sy, sz,
+                ))
+            dense_values.extend(frame_values)
+
+        # Keep only Unity Transform IDs after sampling.  ufbx node wrappers must
+        # be released before the owning scene closes (ufbx 0.0.5 otherwise can
+        # report a native-process failure during interpreter shutdown).
+        animated_transform_ids = [
+            transform_id for transform_id, _node in animated_pairs
+        ]
+        animated_pairs.clear()
+        scene_nodes.clear()
+        node = None
+        transform = None
+        anim = None
+        stack = None
+        baked = None
+
+    return duration, frame_count, animated_transform_ids, dense_values
+
+
 def replace_animation_from_fbx(
     project: AnimationProjectIndex,
     animation_file_index: int,
@@ -2200,8 +2302,6 @@ def replace_animation_from_fbx(
     They are never serialized into the bundle, so the target AnimationClip
     keeps its original PathID and all unrelated Unity metadata.
     """
-    import ufbx
-
     target_obj = project.object(animation_file_index, animation_path_id)
     if target_obj is None or target_obj.type.name != "AnimationClip":
         raise ValueError("The selected Unity object is not an AnimationClip")
@@ -2224,101 +2324,15 @@ def replace_animation_from_fbx(
             project.transforms[model.file_index, transform_id].name
         ].append(transform_id)
 
-    with ufbx.load_file(os.path.abspath(fbx_path)) as scene:
-        if not scene.anim_stacks:
-            raise ValueError("The FBX does not contain an animation stack")
-        stack = scene.anim_stacks[0]
-        begin = float(stack.time_begin)
-        end = float(stack.time_end)
-        duration = max(0.0, end - begin)
-        if duration <= 0.0:
-            raise ValueError("The FBX animation has no playable duration")
-
-        scene_nodes = []
-        for index in range(len(scene.nodes)):
-            node = scene.nodes[index]
-            scene_nodes.append((int(node.element_id), str(node.name), node))
-        baked = ufbx.bake_anim(
-            scene, stack.anim, resample_rate=rate,
-            key_reduction_enabled=False, bake_transform_props=True,
-        )
-        try:
-            animated_ids = {
-                int(baked.nodes[index].element_id)
-                for index in range(len(baked.nodes))
-            }
-        finally:
-            baked.free()
-
-        used_targets: Set[int] = set()
-        animated_pairs = []
-        ambiguous_names = []
-        for element_id, node_name, node in scene_nodes:
-            if element_id not in animated_ids:
-                continue
-            simple_name = node_name.rsplit("|", 1)[-1].rsplit(":", 1)[-1]
-            choices = [
-                transform_id for transform_id in target_names.get(simple_name, [])
-                if transform_id not in used_targets
-            ]
-            if not choices:
-                continue
-            if len(choices) > 1:
-                raise ValueError(f"Ambiguous animation node name {simple_name!r}; use unique bone names")
-            transform_id = choices[0]
-            used_targets.add(transform_id)
-            animated_pairs.append((transform_id, node))
-
-        if not animated_pairs:
-            raise ValueError(
-                "No animated FBX node names match the selected model hierarchy"
-            )
-        order = {path_id: index for index, path_id in enumerate(model.transform_ids)}
-        animated_pairs.sort(key=lambda pair: order[pair[0]])
-        frame_count = max(2, int(math.ceil(duration * rate)) + 1)
-        curve_count = len(animated_pairs) * 10
-        dense_values: List[float] = []
-        curve_values: List[List[float]] = [[] for _ in range(curve_count)]
-        previous_rotations: Dict[int, Tuple[float, float, float, float]] = {}
-
-        for frame_index in range(frame_count):
-            time_value = min(end, begin + frame_index / rate)
-            frame_values: List[float] = []
-            for transform_id, node in animated_pairs:
-                transform = node.evaluate_transform(stack.anim, time_value)
-                tx, ty, tz = _component_values(transform.translation, "xyz")
-                qx, qy, qz, qw = quaternion_normalize(
-                    _component_values(transform.rotation, "xyzw")
-                )
-                unity_rotation = (qx, -qy, -qz, qw)
-                previous = previous_rotations.get(transform_id)
-                if previous and sum(a * b for a, b in zip(previous, unity_rotation)) < 0.0:
-                    unity_rotation = tuple(-value for value in unity_rotation)
-                previous_rotations[transform_id] = unity_rotation
-                sx, sy, sz = _component_values(transform.scale, "xyz")
-                frame_values.extend((
-                    -tx, ty, tz,
-                    unity_rotation[0], unity_rotation[1],
-                    unity_rotation[2], unity_rotation[3],
-                    sx, sy, sz,
-                ))
-            dense_values.extend(frame_values)
-            for index, value in enumerate(frame_values):
-                curve_values[index].append(float(value))
-
-        # Keep only Unity Transform IDs after sampling.  ufbx node wrappers must
-        # be released before the owning scene closes (ufbx 0.0.5 otherwise can
-        # report a native-process failure during interpreter shutdown).
-        animated_transform_ids = [
-            transform_id for transform_id, _node in animated_pairs
-        ]
-        animated_node_count = len(animated_transform_ids)
-        animated_pairs.clear()
-        scene_nodes.clear()
-        node = None
-        transform = None
-        stack = None
-        baked = None
+    from AssetbundleUtils.FbxImportWorker import sample_fbx_isolated
+    duration, frame_count, animated_transform_ids, dense_values = sample_fbx_isolated(
+        fbx_path, rate, dict(target_names), model.transform_ids,
+    )
+    animated_node_count = len(animated_transform_ids)
+    curve_count = animated_node_count * 10
+    if frame_count < 2 or not curve_count or len(dense_values) != frame_count * curve_count:
+        raise RuntimeError("FBX worker returned inconsistent curve dimensions")
+    curve_values = [dense_values[index::curve_count] for index in range(curve_count)]
 
     root_path = project.transforms[model.file_index, model.transform_id].full_path
     generic_bindings = []
@@ -2420,5 +2434,5 @@ def replace_animation_from_fbx(
         "animated_nodes": animated_node_count,
         "curve_count": curve_count,
         "serialized_bytes": len(serialized),
-        "ambiguous_names": sorted(set(ambiguous_names)),
+        "ambiguous_names": [],
     }

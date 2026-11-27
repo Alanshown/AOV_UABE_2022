@@ -25,7 +25,7 @@ from UI.ModernTheme import (
 from AssetbundleUtils.AssetsList import list_assets_window
 
 
-APP_VERSION = "2.3.6"
+APP_VERSION = "2.4"
 
 
 def get_resource_path(filename: str) -> str:
@@ -79,7 +79,7 @@ class Launcher:
         self.language_listener = subscribe(self.apply_language)
         self.vars: dict[str, tk.StringVar] = {}
 
-        root.title(tr("app_title"))
+        root.title(f"{tr('app_title')} {APP_VERSION}")
         root.minsize(920, 580)
         root.configure(bg=COLORS["canvas"])
         center_window(root, 1060, 680)
@@ -307,6 +307,8 @@ class Launcher:
         ).pack(pady=(13, 0))
 
     def _register_drop_targets(self):
+        if not getattr(self.root, "TkdndVersion", None):
+            return
         for widget in (self.root, self.drop_overlay):
             widget.drop_target_register(DND_FILES)
             widget.dnd_bind("<<DropEnter>>", self._on_drop_enter)
@@ -353,7 +355,7 @@ class Launcher:
 
     def apply_language(self, code: str):
         self.lang_code = code
-        self.root.title(tr("app_title"))
+        self.root.title(f"{tr('app_title')} {APP_VERSION}")
         for key, variable in self.vars.items():
             variable.set(tr(key))
         for label_key, label_var, detail_key, detail_var in self.feature_vars:
@@ -454,7 +456,7 @@ class Launcher:
             list_assets_window(self.selected_path, self.is_directory, self.root)
 
     def about(self):
-        show_dialog(self.root, tr("app_title"), tr("about_body"))
+        show_dialog(self.root, f"{tr('app_title')} {APP_VERSION}", tr("about_body"))
 
     def close(self):
         unsubscribe(self.language_listener)
@@ -468,9 +470,30 @@ class Launcher:
         self.root.destroy()
 
 
+class AppRoot(tk.Tk, TkinterDnD.DnDWrapper):
+    """Provide TkDND widget methods without making extension load mandatory."""
+
+
+def create_app_root():
+    """A missing optional TkDND plugin must not disable the file picker."""
+    root = AppRoot()
+    root.TkdndVersion = None
+    try:
+        attach_tkdnd = getattr(TkinterDnD, "require", None) or TkinterDnD._require
+        root.TkdndVersion = attach_tkdnd(root)
+    except (RuntimeError, tk.TclError) as exc:
+        if sys.stderr is not None:
+            print(f"Drag and drop disabled: {exc}", file=sys.stderr)
+    return root
+
+
 def main():
     multiprocessing.freeze_support()
-    root = TkinterDnD.Tk()
+    if len(sys.argv) == 4 and sys.argv[1] == "--sample-fbx-worker":
+        from AssetbundleUtils.FbxImportWorker import worker_main
+        worker_main(*sys.argv[2:])
+        return
+    root = create_app_root()
     Launcher(root)
     root.mainloop()
 

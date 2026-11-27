@@ -34,25 +34,25 @@ def About():
     about_content = {
         "zh-cn": {
             "title": "AOV_UABE",
-            "version": "版本号：2.0.0",
+            "version": "版本号：2.4",
             "desc": "基于UnityPy_AOV项目开发的GUI工具，可以用于打包/解包最新的Unity2022版本AssetBundle文件",
             "author": "作者：ShownAlan"
         },
         "zh-tw": {
             "title": "AOV_UABE",
-            "version": "版本號：2.0.0",
+            "version": "版本號：2.4",
             "desc": "基於UnityPy_AOV項目開發的GUI工具，可以用於打包/解包最新的Unity2022版本AssetBundle文件",
             "author": "作者：ShownAlan"
         },
         "en": {
             "title": "AOV_UABE",
-            "version": "Version: 2.0.0",
+            "version": "Version: 2.4",
             "desc": "A GUI tool based on UnityPy_AOV project for packing/unpacking the latest Unity2022 AssetBundle files",
             "author": "Author: ShownAlan"
         },
         "vn": {
             "title": "AOV_UABE",
-            "version": "Phiên bản: 2.0.0",
+            "version": "Phiên bản: 2.4",
             "desc": "Công cụ GUI dựa trên dự án UnityPy_AOV để đóng gói/giải nén các tệp AssetBundle Unity2022 mới nhất",
             "author": "Tác giả: ShownAlan"
         }

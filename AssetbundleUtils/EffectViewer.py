@@ -7,9 +7,8 @@ import time
 
 import numpy as np
 from PIL import Image
-from OpenGL.GL import *
-
 from AssetbundleUtils.OBJ_Viewer import OBJViewer
+from OpenGL.GL import *
 
 
 class EffectViewer(OBJViewer):
@@ -41,6 +40,8 @@ class EffectViewer(OBJViewer):
         if not self.texture_id:
             return
         try:
+            if hasattr(self, "realize_preview") and self.context_created:
+                self.tkMakeCurrent()
             glDeleteTextures([int(self.texture_id)])
         except Exception:
             pass
@@ -224,6 +225,8 @@ class EffectViewer(OBJViewer):
         if self.is_loading or len(self.vertices) == 0 or len(self.indices) == 0:
             return
         try:
+            if hasattr(self, "realize_preview"):
+                self.tkMakeCurrent()
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
             glLoadIdentity()
             glTranslatef(self.trans_x / 80, -self.trans_y / 80, self.zoom_factor)

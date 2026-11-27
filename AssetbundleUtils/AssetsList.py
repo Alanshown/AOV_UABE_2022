@@ -56,7 +56,7 @@ list_window = None
 
 
 def _safe_filename(value: str) -> str:
-    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", value).strip(" .")
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", _display_asset_text(value)).strip(" .")
     return cleaned[:120] or "asset"
 
 
@@ -2075,7 +2075,7 @@ class AssetBrowser:
             return
         self.dump_text.configure(state="normal")
         self.dump_text.delete("1.0", "end")
-        self.dump_text.insert("1.0", str(text))
+        self.dump_text.insert("1.0", str(text).encode("utf-8", "backslashreplace").decode("utf-8"))
         self.dump_text.mark_set("insert", "1.0")
         self.dump_text.see("1.0")
         self.dump_text.configure(state="disabled")
@@ -2328,6 +2328,9 @@ class AssetBrowser:
                     self.obj_viewer = OBJViewer(self.preview_card)
                 self.preview_label.place_forget()
                 self.obj_viewer.place(relx=0, rely=0, relwidth=1, relheight=1)
+                realize = getattr(self.obj_viewer, "realize_preview", None)
+                if realize is not None:
+                    realize()
                 if kind == "effect":
                     self.obj_viewer.load_effect_payload(payload)
                     self.obj_viewer.set_loop(self.effect_loop_var.get())

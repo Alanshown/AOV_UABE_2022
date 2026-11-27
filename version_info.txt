@@ -1,7 +1,7 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(2, 3, 6, 0),
-    prodvers=(2, 3, 6, 0),
+    filevers=(2, 4, 0, 0),
+    prodvers=(2, 4, 0, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -16,12 +16,12 @@ VSVersionInfo(
         [
           StringStruct(u'CompanyName', u'ShownAlan'),
           StringStruct(u'FileDescription', u'AOV Unity 2022 AssetBundle Research Tool'),
-          StringStruct(u'FileVersion', u'2.3.6'),
+          StringStruct(u'FileVersion', u'2.4'),
           StringStruct(u'InternalName', u'AOV_UABE_2022'),
           StringStruct(u'LegalCopyright', u'Copyright (c) ShownAlan'),
           StringStruct(u'OriginalFilename', u'AOV_UABE_2022.exe'),
           StringStruct(u'ProductName', u'AOV UABE 2022'),
-          StringStruct(u'ProductVersion', u'2.3.6')
+          StringStruct(u'ProductVersion', u'2.4')
         ]
       )
     ]),
