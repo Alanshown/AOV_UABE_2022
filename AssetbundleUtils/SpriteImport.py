@@ -179,6 +179,11 @@ def resolve_sprite_backing(sprite_reader, sprite_file_index: int, project=None):
         project, render_source_reader, render_source_index,
         render_data.texture, "Texture2D"
     )
+    if texture_reader is None:
+        raise ValueError(
+            f"Sprite PathID {sprite_reader.path_id} has no backing Texture2D. "
+            "Check the assigned SpriteAtlas and load its bundle before replacement."
+        )
 
     alpha_file_index = None
     alpha_reader = None

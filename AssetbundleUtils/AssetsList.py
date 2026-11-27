@@ -56,7 +56,7 @@ list_window = None
 
 
 def _safe_filename(value: str) -> str:
-    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", value).strip(" .")
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", _display_asset_text(value)).strip(" .")
     return cleaned[:120] or "asset"
 
 
@@ -2075,7 +2075,7 @@ class AssetBrowser:
             return
         self.dump_text.configure(state="normal")
         self.dump_text.delete("1.0", "end")
-        self.dump_text.insert("1.0", str(text))
+        self.dump_text.insert("1.0", str(text).encode("utf-8", "backslashreplace").decode("utf-8"))
         self.dump_text.mark_set("insert", "1.0")
         self.dump_text.see("1.0")
         self.dump_text.configure(state="disabled")

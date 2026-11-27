@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 import csv
+import errno
 import hashlib
 import json
 import os
@@ -18,6 +19,9 @@ from PIL import Image
 
 from AssetbundleUtils import UnityPy_AOV
 from AssetbundleUtils.MeshImport import replace_mesh_from_obj, validate_mesh_payload, synchronize_mesh_renderer_bounds
+from AssetbundleUtils.SpriteImport import (
+    SpriteProjectIndex, replace_sprite_image, resolve_sprite_backing,
+)
 from AssetbundleUtils.TextureImport import (
     optimize_texture_runtime_storage,
     replace_texture_image,
@@ -30,6 +34,7 @@ from AssetbundleUtils.UnityPy_AOV.classes.AssetBundle import AssetInfo
 from AssetbundleUtils.UnityPy_AOV.classes.PPtr import PPtr
 from AssetbundleUtils.UnityPy_AOV.files.SerializedFile import SerializedType
 from AssetbundleUtils.UnityPy_AOV.helpers.ResourceReader import get_resource_data
+from AssetbundleUtils.UnityPy_AOV.helpers.TypeTreeHelper import TypeTreeNode
 from AssetbundleUtils.UnityPy_AOV.streams import (
     EndianBinaryReader,
     EndianBinaryWriter,
@@ -147,9 +152,22 @@ def _write_bytes(path: str, data: bytes) -> None:
 
 def _write_json(path: str, value) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8", newline="\n") as handle:
-        json.dump(value, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
+    # Unity readers use surrogateescape to preserve non-UTF-8 source bytes.
+    # Escape only surrogate code units on disk; JSON reload restores the
+    # original string, and ordinary Unicode stays readable.
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", dir=os.path.dirname(path), encoding="utf-8",
+            errors="backslashreplace", newline="\n", delete=False,
+        ) as handle:
+            temporary = handle.name
+            json.dump(value, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+        os.replace(temporary, path)
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def _index_record(item: dict) -> dict:
@@ -205,7 +223,7 @@ def _write_index_files(
         "source_node", "bytes", "sha256", "stream_payload",
         "stream_bytes", "stream_sha256", "stream_path",
     ]
-    with open(csv_path, "w", encoding="utf-8-sig", newline="") as handle:
+    with open(csv_path, "w", encoding="utf-8-sig", errors="backslashreplace", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(ordered)
@@ -256,10 +274,10 @@ def _relative(path: str, root: str) -> str:
 def _available_project_directory(output_root: str, source_path: str) -> str:
     stem = _safe_filename(os.path.splitext(os.path.basename(source_path))[0], "bundle")
     candidate = os.path.join(os.path.abspath(output_root), stem)
-    if not os.path.exists(candidate):
+    if not os.path.lexists(candidate):
         return candidate
     suffix = 1
-    while os.path.exists(f"{candidate}_{suffix}"):
+    while os.path.lexists(f"{candidate}_{suffix}"):
         suffix += 1
     return f"{candidate}_{suffix}"
 
@@ -585,7 +603,7 @@ def _export_decoded_asset(obj, data, asset_dir: str, base: str) -> Dict[str, obj
             exported["editable_sha256"] = _sha256(raw)
         elif obj.type.name == "Mesh":
             path = os.path.join(asset_dir, f"{base}.obj")
-            with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            with open(path, "w", encoding="utf-8", errors="backslashreplace", newline="\n") as handle:
                 handle.write(data.export())
             exported["editable"] = os.path.basename(path)
             exported["editable_sha256"] = _sha256(open(path, "rb").read())
@@ -622,7 +640,36 @@ def export_bundle_project(
     """Export every object raw plus decoded supported assets and relationship JSON."""
 
     source_path = os.path.abspath(source_path)
-    project_dir = _available_project_directory(output_root, source_path)
+    output_root = os.path.abspath(output_root)
+    os.makedirs(output_root, exist_ok=True)
+    # Keep all output on the destination volume and expose the complete
+    # project only after the backup, manifest and indexes were written.
+    with tempfile.TemporaryDirectory(prefix=".aov-export-", dir=output_root) as stage:
+        staged = os.path.join(stage, "project")
+        result = _export_bundle_project_into(
+            source_path, staged, export_decoded=export_decoded,
+            source_bytes=source_bytes,
+        )
+        while True:
+            destination = _available_project_directory(output_root, source_path)
+            try:
+                os.rename(staged, destination)
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EEXIST, errno.ENOTEMPTY):
+                    raise
+                if not os.path.lexists(destination):
+                    raise
+        for key in ("manifest", "index", "backup"):
+            result[key] = os.path.join(destination, os.path.relpath(result[key], staged))
+        result["path"] = destination
+        return result
+
+
+def _export_bundle_project_into(
+    source_path: str, project_dir: str, *, export_decoded: bool,
+    source_bytes: Optional[bytes],
+) -> Dict[str, object]:
     os.makedirs(project_dir, exist_ok=False)
     backup_dir = os.path.join(project_dir, "backup")
     internal_dir = os.path.join(project_dir, "internal")
@@ -768,26 +815,72 @@ def stage_cross_bundle_assets(
     """
 
     project_dir = os.path.abspath(project_dir)
+    baseline = _project_snapshot(project_dir)
+    stage = tempfile.mkdtemp(prefix=".aov-import-", dir=os.path.dirname(project_dir))
+    work = os.path.join(stage, "updated")
+    previous = os.path.join(stage, "previous")
+    keep_original = False
+    try:
+        shutil.copytree(project_dir, work, symlinks=True)
+        _project_snapshot(work)
+        report = _stage_cross_bundle_assets_into(
+            work, selections, remove_path_ids=remove_path_ids,
+            original_project=project_dir,
+        )
+        if _project_snapshot(project_dir) != baseline:
+            raise OSError("The project changed during import; no changes were applied")
+        os.rename(project_dir, previous)
+        keep_original = True
+        try:
+            os.rename(work, project_dir)
+        except BaseException as install_error:
+            try:
+                os.rename(previous, project_dir)
+            except OSError as restore_error:
+                raise OSError(
+                    f"{install_error}; could not restore the project: "
+                    f"{restore_error}. Original retained at {previous}"
+                ) from install_error
+            keep_original = False
+            raise
+        keep_original = False
+        return report
+    finally:
+        if not keep_original:
+            shutil.rmtree(stage, ignore_errors=True)
+
+
+def _stage_cross_bundle_assets_into(
+    project_dir, selections, *, remove_path_ids, original_project,
+):
     manifest = _load_manifest(project_dir)
+    if manifest.get("$schema") != SCHEMA:
+        raise ValueError("Cross-bundle imports require a v2 project; export it again first")
     backup_path = os.path.join(
         project_dir, *manifest["source"]["backup"].split("/")
     )
     target_environment = UnityPy_AOV.load(backup_path)
-    target_assets_file = next(iter(target_environment.assets), None)
-    if target_assets_file is None:
-        raise ValueError("Target bundle has no serialized CAB")
+    target_cabs = list(target_environment.assets)
+    if len(target_cabs) != 1:
+        raise ValueError("Cross-bundle import requires one unambiguous target CAB")
+    target_assets_file = target_cabs[0]
     target_external_ids = {
         str(external.path): index
         for index, external in enumerate(
             target_assets_file.externals, start=1
         )
     }
-    selected_ids = {
-        int(path_id)
-        for path_ids in selections.values()
-        for path_id in path_ids
+    requests = {
+        os.path.abspath(path): tuple(int(path_id) for path_id in path_ids)
+        for path, path_ids in selections.items()
     }
+    all_ids = [path_id for path_ids in requests.values() for path_id in path_ids]
+    selected_ids = set(all_ids)
+    if len(all_ids) != len(selected_ids) or 0 in selected_ids:
+        raise ValueError("Donor selections contain duplicate or reserved PathIDs")
+    current = _scan_project_assets(project_dir, manifest)
     existing_ids = {int(obj.path_id) for obj in target_environment.objects}
+    existing_ids.update(int(item["path_id"]) for item in current["items"])
     collisions = sorted(selected_ids & existing_ids)
     if collisions:
         raise ValueError(
@@ -797,29 +890,43 @@ def stage_cross_bundle_assets(
 
     removed = []
     remove_ids = {int(value) for value in remove_path_ids}
-    for item in manifest.get("assets", []):
+    present_target = {
+        int(item["path_id"]): item for item in current["items"]
+        if int(item["path_id"]) not in remove_ids
+    }
+    for item in current["items"]:
         if int(item["path_id"]) not in remove_ids:
             continue
-        for field in ("raw", "editable"):
-            relative = item.get(field)
+        if item["type"] == "AssetBundle":
+            raise ValueError("The target AssetBundle catalog cannot be removed")
+        stream = item.get("stream") or {}
+        for relative in (item.get("raw"), item.get("editable"), stream.get("payload")):
             if relative:
                 path = os.path.join(project_dir, *relative.split("/"))
                 if os.path.isfile(path):
                     os.remove(path)
-        stream = item.get("stream") or {}
-        if stream.get("payload"):
-            path = os.path.join(
-                project_dir, *stream["payload"].split("/")
-            )
-            if os.path.isfile(path):
-                os.remove(path)
-        removed.append(
-            {
-                "type": item["type"],
-                "path_id": int(item["path_id"]),
-                "name": item.get("name", ""),
-            }
-        )
+        removed.append({
+            "type": item["type"], "path_id": int(item["path_id"]),
+            "name": item.get("name", ""),
+        })
+
+    donors = {}
+    exact_selections = set()
+    for path, path_ids in requests.items():
+        donor = UnityPy_AOV.load(path)
+        candidates = {}
+        for obj in donor.objects:
+            pid = int(obj.path_id)
+            if pid not in path_ids:
+                continue
+            if pid in candidates:
+                raise ValueError(f"Donor {path} has PathID {pid} in multiple CABs")
+            candidates[pid] = obj
+            exact_selections.add((str(obj.assets_file.name).casefold(), pid))
+        missing = sorted(set(path_ids) - candidates.keys())
+        if missing:
+            raise ValueError(f"Donor {path} is missing PathIDs {missing[:16]}")
+        donors[path] = candidates
 
     imported = []
     imported_types = list(manifest.get("imported_types", []))
@@ -835,61 +942,23 @@ def stage_cross_bundle_assets(
         for item in imported_types
     }
     import_sources = []
-    for source_path, requested_ids in selections.items():
-        source_path = os.path.abspath(source_path)
-        environment = UnityPy_AOV.load(source_path)
-        requested = {int(value) for value in requested_ids}
-        source_objects = {
-            int(obj.path_id): obj for obj in environment.objects
-        }
-        missing = sorted(requested - set(source_objects))
-        if missing:
-            raise ValueError(
-                f"Donor {source_path} is missing PathIDs {missing[:16]}"
-            )
-        pointer_mappings = {}
-        for bundle_obj in environment.objects:
-            if bundle_obj.type.name != "AssetBundle":
-                continue
-            donor_bundle = bundle_obj.read(False)
-            for pointer in donor_bundle.m_PreloadTable:
-                file_id = int(pointer.file_id)
-                path_id = int(pointer.path_id)
-                if file_id <= 0:
-                    continue
-                if path_id in selected_ids:
-                    target_file_id = 0
-                else:
-                    external = pointer.assets_file.externals[file_id - 1]
-                    target_file_id = target_external_ids.get(
-                        str(external.path)
-                    )
-                    if target_file_id is None:
-                        continue
-                pointer_mappings[(file_id, path_id)] = (
-                    target_file_id, path_id
-                )
-        for path_id in sorted(requested):
-            obj = source_objects[path_id]
+    for source_path, source_objects in donors.items():
+        for path_id, obj in sorted(source_objects.items()):
             if obj.type.name == "AssetBundle":
                 raise ValueError(
                     "A donor AssetBundle catalog cannot be nested as an "
                     "ordinary object; select its referenced assets instead"
                 )
-            raw = bytes(obj.get_raw_data())
-            endian = obj.reader.endian
-            for (old_file_id, old_path_id), (
-                new_file_id, new_path_id
-            ) in pointer_mappings.items():
-                old = struct.pack(
-                    endian + "iq", old_file_id, old_path_id
-                )
-                if old not in raw:
-                    continue
-                new = struct.pack(
-                    endian + "iq", new_file_id, new_path_id
-                )
-                raw = raw.replace(old, new)
+            source_cab = obj.assets_file
+            if (source_cab.header.endian != target_assets_file.header.endian
+                    or source_cab.header.version != target_assets_file.header.version
+                    or source_cab.target_platform != target_assets_file.target_platform
+                    or tuple(obj.version) != tuple(target_assets_file.version)):
+                raise ValueError(f"Donor {obj.type.name} {path_id} has an incompatible serialized layout")
+            raw, rebased = _rebase_donor_pointers(
+                obj, target_assets_file, target_external_ids, exact_selections,
+                present_target,
+            )
             type_name = obj.type.name
             name = _object_name(obj)
             serialized = obj.serialized_type
@@ -916,13 +985,7 @@ def stage_cross_bundle_assets(
                 "raw": _relative(raw_path, project_dir),
                 "source_bundle": source_path,
                 "serialized_type_hash": serialized_type_hash,
-                "rebased_external_pointers": sum(
-                    raw.count(
-                        struct.pack(endian + "iq", target_id, pointer_id)
-                    )
-                    for target_id, pointer_id
-                    in pointer_mappings.values()
-                ),
+                "rebased_external_pointers": rebased,
             }
             manifest_item = {
                 "type": type_name,
@@ -938,8 +1001,11 @@ def stage_cross_bundle_assets(
             parsed = None
             try:
                 parsed = obj.read(False)
-            except Exception:
-                pass
+            except Exception as exc:
+                if type_name in {"Texture2D", "Mesh", "AudioClip", "VideoClip"}:
+                    raise ValueError(
+                        f"Donor {type_name} {path_id} is missing data or its layout could not be read"
+                    ) from exc
             descriptor = (
                 _stream_descriptor(obj, parsed)
                 if parsed is not None
@@ -980,6 +1046,10 @@ def stage_cross_bundle_assets(
                 serialized_type_key not in target_type_keys
                 and serialized_type_key not in known_imported_type_keys
             ):
+                if int(getattr(serialized, "script_type_index", -1)) >= 0:
+                    raise ValueError(
+                        f"Donor {type_name} {path_id} needs a target script type definition"
+                    )
                 descriptor_type = {
                     "target_node": target_assets_file.name,
                     "class_id": class_id,
@@ -997,13 +1067,17 @@ def stage_cross_bundle_assets(
                     descriptor_type["script_id"] = bytes(
                         serialized.script_id
                     ).hex()
+                if getattr(target_assets_file, "_enable_type_tree", False):
+                    descriptor_type["embedded_typetree"] = _stage_embedded_typetree(
+                        serialized, target_assets_file.header.version, type_name, path_id,
+                    )
                 imported_types.append(descriptor_type)
                 known_imported_type_keys.add(serialized_type_key)
         import_sources.append(
             {
                 "path": source_path,
                 "sha256": _sha256(open(source_path, "rb").read()),
-                "assets": len(requested),
+                "assets": len(source_objects),
             }
         )
 
@@ -1013,7 +1087,7 @@ def stage_cross_bundle_assets(
         os.path.join(project_dir, "bundle_manifest.json"), manifest
     )
     report = {
-        "project": project_dir,
+        "project": original_project,
         "removed": removed,
         "imported": imported,
         "imported_types": imported_types,
@@ -1030,6 +1104,76 @@ def stage_cross_bundle_assets(
         report["sources"] = previous.get("sources", []) + report["sources"]
     _write_json(report_path, report)
     return report
+
+
+def _rebase_donor_pointers(obj, target, target_external_ids, selections, present_target):
+    """Rebind only parsed pointers, with exact CAB and PathID identity."""
+    raw = bytes(obj.get_raw_data())
+    owner = obj.assets_file
+    location = f"Donor {obj.type.name} {obj.path_id}"
+    try:
+        tree = obj.read_typetree()
+    except Exception as exc:
+        # AOV Shader is frequently not readable through the Unity TypeTree.
+        # Stay conservative when there is no way to verify donor references.
+        raise ValueError(f"{location}: cannot verify references for cross-bundle import") from exc
+    pending = []
+
+    def visit(value):
+        if isinstance(value, dict):
+            if "m_FileID" in value and "m_PathID" in value:
+                file_id, pid = int(value["m_FileID"]), int(value["m_PathID"])
+                if not pid:
+                    return
+                if file_id == 0:
+                    if (str(owner.name).casefold(), pid) in selections:
+                        return
+                    source_obj = owner.objects.get(pid)
+                    target_obj = target.objects.get(pid)
+                    active = present_target.get(pid)
+                    if (source_obj is not None and target_obj is not None and active is not None
+                            and source_obj.type == target_obj.type
+                            and bytes(source_obj.get_raw_data()) == bytes(target_obj.get_raw_data())
+                            and _sha256(target_obj.get_raw_data()) == active["sha256"]):
+                        return
+                    raise ValueError(f"{location}: also select local dependency PathID {pid}")
+                if file_id < 0 or file_id > len(owner.externals):
+                    raise ValueError(f"{location}: invalid external FileID {file_id}")
+                external = owner.externals[file_id - 1]
+                name = str(external.name).casefold()
+                if (name, pid) in selections or (
+                    name == str(target.name).casefold() and pid in present_target
+                ):
+                    mapped = 0
+                else:
+                    mapped = target_external_ids.get(str(external.path))
+                    if mapped is None:
+                        raise ValueError(
+                            f"{location}: target has no matching CAB for {external.path} / {pid}; "
+                            "also select the referenced donor asset"
+                        )
+                if mapped != file_id:
+                    pending.append((value, mapped))
+                return
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, (tuple, list)):
+            for child in value:
+                visit(child)
+
+    visit(tree)
+    if not pending:
+        return raw, 0
+    obj.save_typetree(tree)
+    if bytes(obj.get_raw_data()) != raw:
+        obj.set_raw_data(raw)
+        raise ValueError(f"{location}: could not safely preserve its original serialized fields")
+    for pointer, file_id in pending:
+        pointer["m_FileID"] = file_id
+    obj.save_typetree(tree)
+    rebound = bytes(obj.get_raw_data())
+    obj.set_raw_data(raw)
+    return rebound, len(pending)
 
 
 def _load_manifest(project_dir: str) -> dict:
@@ -1058,6 +1202,27 @@ def _restore_resource_nodes(bundle, project_dir: str, manifest: dict) -> None:
         reader.flags = int(node_info.get("flags", 0))
         reader.name = node_info["name"]
         bundle.files[node_info["name"]] = reader
+
+
+_TYPETREE_NODE_FIELDS = (
+    "m_Version", "m_Level", "m_TypeFlags", "m_TypeStrOffset", "m_NameStrOffset",
+    "m_ByteSize", "m_Index", "m_MetaFlag", "m_RefTypeHash", "m_Name", "m_Type",
+)
+
+
+def _stage_embedded_typetree(serialized, version, type_name, path_id):
+    nodes = getattr(serialized, "nodes", None)
+    if (version < 21 or not nodes or not hasattr(serialized, "string_data")
+            or getattr(serialized, "type_dependencies", ())
+            or any(getattr(node, "m_RefTypeHash", 0) for node in nodes)):
+        raise ValueError(
+            f"Donor {type_name} {path_id} has no compatible self-contained embedded TypeTree"
+        )
+    return {
+        "nodes": [{field: getattr(node, field) for field in _TYPETREE_NODE_FIELDS}
+                  for node in nodes],
+        "strings_hex": bytes(serialized.string_data).hex(),
+    }
 
 
 def _install_imported_types(environment, manifest: dict) -> None:
@@ -1096,6 +1261,16 @@ def _install_imported_types(environment, manifest: dict) -> None:
         serialized.old_type_hash = old_type_hash
         if descriptor.get("script_id"):
             serialized.script_id = bytes.fromhex(descriptor["script_id"])
+        if assets_file._enable_type_tree:
+            tree = descriptor.get("embedded_typetree")
+            if not tree or not tree.get("nodes"):
+                raise ValueError(
+                    "Imported serialized type is missing its embedded TypeTree; "
+                    "re-import the donor asset into a fresh export"
+                )
+            serialized.nodes = [TypeTreeNode(**node) for node in tree["nodes"]]
+            serialized.string_data = bytes.fromhex(tree["strings_hex"])
+            serialized.type_dependencies = []
         assets_file.types.append(serialized)
         assets_file.mark_changed()
 
@@ -1304,7 +1479,7 @@ def _scan_project_assets(project_dir: str, manifest: dict) -> dict:
         directory_type = DIRECTORY_TYPES.get(directory_name)
         known = {
             item["type"]
-            for item in manifest.get("assets", [])
+            for item in (*backup_records.values(), *current_records.values())
             if item["raw"].replace("\\", "/").startswith(
                 f"assets/{directory_name}/"
             )
@@ -1314,6 +1489,12 @@ def _scan_project_assets(project_dir: str, manifest: dict) -> dict:
             if directory_type is None or directory_type not in known:
                 directory_type = manifest_type
         if directory_type is None:
+            if not any(
+                name.lower().endswith(".raw")
+                for _, _, files in os.walk(directory_entry.path)
+                for name in files
+            ):
+                continue
             raise ValueError(
                 f"Cannot infer Unity type for assets/{directory_name}"
             )
@@ -2234,7 +2415,7 @@ def _null_deleted_references(environment, deleted_ids: set) -> List[dict]:
                     return
             for key, child in value.items():
                 visit(child, locations, f"{location}.{key}")
-        elif isinstance(value, list):
+        elif isinstance(value, (list, tuple)):
             for index, child in enumerate(value):
                 visit(child, locations, f"{location}[{index}]")
 
@@ -2299,7 +2480,7 @@ def _remap_path_id_references(
                     return
             for key, child in value.items():
                 visit(child, locations, f"{location}.{key}")
-        elif isinstance(value, list):
+        elif isinstance(value, (list, tuple)):
             for index, child in enumerate(value):
                 visit(child, locations, f"{location}[{index}]")
 
@@ -2377,7 +2558,7 @@ def _validate_local_references(
                 visit(
                     child, local_ids, owner, f"{location}.{key}"
                 )
-        elif isinstance(value, list):
+        elif isinstance(value, (list, tuple)):
             for index, child in enumerate(value):
                 visit(
                     child, local_ids, owner, f"{location}[{index}]"
@@ -2522,6 +2703,8 @@ def _apply_dynamic_project_objects(
             ) from exc
 
     edited_images = []
+    edited_sprites = []
+    edited_text_assets = []
     edited_typetrees = []
     edited_meshes = []
     for item in scan["items"]:
@@ -2538,15 +2721,22 @@ def _apply_dynamic_project_objects(
             edited_images.append((obj, editable_path, item))
         elif item["type"] == "Mesh" and editable.lower().endswith(".obj"):
             edited_meshes.append((obj, editable_path))
+        elif item["type"] == "Sprite" and editable.lower().endswith(".png"):
+            edited_sprites.append((obj, editable_path))
+        elif item["type"] == "TextAsset" and editable.lower().endswith(".bin"):
+            edited_text_assets.append((obj, editable_path))
         elif editable.lower().endswith(".json"):
             edited_typetrees.append((obj, editable_path))
+        else:
+            raise ValueError(
+                f"{item['type']} {item['path_id']}: cannot apply "
+                f"{os.path.basename(editable_path)}; use a compatible raw asset"
+            )
 
-    for obj, editable_path, item in edited_images:
-        with Image.open(editable_path) as source:
-            image = source.convert("RGBA").copy()
-        texture = obj.read(False)
-        replace_texture_image(texture, image)
-        texture.save()
+    items_by_key = {(item["type"], int(item["path_id"])): item for item in scan["items"]}
+    modified_streams = set()
+
+    def remember_edited_texture(obj, item):
         descriptor = _stream_descriptor(obj)
         stream = item.get("stream")
         if descriptor is not None:
@@ -2563,16 +2753,59 @@ def _apply_dynamic_project_objects(
                     descriptor["size"],
                 )
             )
-            payload_path = os.path.join(
-                project_dir, *stream["payload"].split("/")
-            )
-            _write_bytes(payload_path, payload)
+            # The project input is never changed by a failed rebuild. The
+            # edited sidecar is committed with the verified project refresh.
+            item["_edited_stream_payload"] = payload
             stream.update(
                 {
                     **descriptor,
                     "payload_sha256": _sha256(payload),
                 }
             )
+    for obj, editable_path, item in edited_images:
+        with Image.open(editable_path) as source:
+            image = source.convert("RGBA").copy()
+        texture = obj.read(False)
+        replace_texture_image(texture, image)
+        texture.save()
+        remember_edited_texture(obj, item)
+        modified_streams.add(int(obj.path_id))
+    if edited_sprites:
+        sprite_index = SpriteProjectIndex([environment])
+        original_records = {
+            (item["type"], int(item["path_id"])): item
+            for item in manifest.get("assets", [])
+        }
+        for obj, editable_path in edited_sprites:
+            binding = resolve_sprite_backing(obj, 0, sprite_index)
+            for target in (binding["texture_reader"], binding["alpha_reader"]):
+                if target is None:
+                    continue
+                key = ("Texture2D", int(target.path_id))
+                item = items_by_key[key]
+                baseline_hash = (original_records.get(key, {}).get("stream") or {}).get("payload_sha256")
+                current_hash = (item.get("stream") or {}).get("payload_sha256")
+                if int(target.path_id) not in modified_streams and baseline_hash and current_hash != baseline_hash:
+                    raise ValueError(
+                        f"Sprite {obj.path_id}: backing Texture2D {target.path_id} "
+                        "also has a changed resource sidecar. Apply those edits in separate rebuilds."
+                    )
+            with Image.open(editable_path) as source:
+                image = source.convert("RGBA").copy()
+            result = replace_sprite_image(obj, 0, sprite_index, image)
+            for target in result["targets"]:
+                reader = target["reader"]
+                item = items_by_key[("Texture2D", int(reader.path_id))]
+                remember_edited_texture(reader, item)
+                if item.get("editable", "").lower().endswith(".png"):
+                    item["_refresh_editable_png"] = target["preview_png"]
+                modified_streams.add(int(reader.path_id))
+    for obj, editable_path in edited_text_assets:
+        with open(editable_path, "rb") as handle:
+            replacement = handle.read()
+        text_asset = obj.read(False)
+        text_asset.m_Script = replacement
+        text_asset.save()
     for obj, editable_path in edited_meshes:
         replace_mesh_from_obj(obj, editable_path)
         synchronize_mesh_renderer_bounds([environment], obj)
@@ -2604,6 +2837,8 @@ def _apply_dynamic_project_objects(
     )
     return {
         "textures": len(edited_images),
+        "sprites": len(edited_sprites),
+        "text_assets": len(edited_text_assets),
         "typetrees": len(edited_typetrees),
         "meshes": len(edited_meshes),
         "mesh_path_ids": [int(obj.path_id) for obj, _ in edited_meshes],
@@ -2847,7 +3082,9 @@ def _rebuild_stream_resources(
         payload_path = os.path.join(
             project_dir, *stream["payload"].split("/")
         )
-        if not recovered:
+        if "_edited_stream_payload" in item:
+            payload = item["_edited_stream_payload"]
+        elif not recovered:
             if not os.path.isfile(payload_path):
                 raise ValueError(
                     f"External payload is missing for {item['type']} "
@@ -3151,11 +3388,16 @@ def _synchronize_project_files(
         obj = objects[(item["type"], int(item["path_id"]))]
         raw_path = os.path.join(project_dir, *item["raw"].split("/"))
         _write_bytes(raw_path, bytes(obj.get_raw_data()))
+        if "_refresh_editable_png" in item:
+            _write_bytes(
+                os.path.join(project_dir, *item["editable"].split("/")),
+                item["_refresh_editable_png"],
+            )
         descriptor = _stream_descriptor(obj)
         if descriptor is not None and item.get("stream"):
             stream = item["stream"]
             stream.update(descriptor)
-            if item.pop("_recovered_stream_payload", False):
+            if item.get("_recovered_stream_payload") or "_edited_stream_payload" in item:
                 payload = get_resource_data(
                     descriptor["path"], obj.assets_file,
                     descriptor["offset"], descriptor["size"],
@@ -3524,6 +3766,8 @@ def rebuild_bundle_project(
         "packer": selected_packer,
         "assets": len(actual_inventory),
         "edited_textures": edited["textures"],
+        "edited_sprites": edited.get("sprites", 0),
+        "edited_text_assets": edited.get("text_assets", 0),
         "edited_typetrees": edited["typetrees"],
         "edited_meshes": edited["meshes"],
         "added_assets": edited["added"],

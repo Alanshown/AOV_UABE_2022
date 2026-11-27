@@ -89,7 +89,7 @@ def export_typetree_dump(obj, path):
                    "unity_version": list(obj.version), "typetree_sha256": _type_signature(obj)},
         "tree": _encode(obj.read_typetree()),
     }
-    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+    with open(path, "w", encoding="utf-8", errors="backslashreplace", newline="\n") as handle:
         json.dump(document, handle, ensure_ascii=False, indent=2, allow_nan=False)
         handle.write("\n")
 
