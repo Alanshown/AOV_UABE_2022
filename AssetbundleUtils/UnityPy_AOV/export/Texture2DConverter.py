@@ -3,6 +3,7 @@ import etcpak
 from PIL import Image
 from copy import copy
 from io import BytesIO
+from functools import lru_cache
 import struct
 from threading import Lock
 from ..enums import TextureFormat, BuildTarget
@@ -119,6 +120,44 @@ def _compress_astc(image: Image.Image, texture_format: TF) -> bytes:
         return context.compress(astc_image, swizzle)
 
 
+_ETCPAK_ETC = {
+    "etc1": (("compress_etc1_rgb", "compress_to_etc1"), "decode_etc1"),
+    "etc2_rgb": (("compress_etc2_rgb", "compress_to_etc2", "compress_to_etc2_rgb"), "decode_etc2"),
+    "etc2_rgba": (("compress_etc2_rgba", "compress_to_etc2_rgba"), "decode_etc2a8"),
+}
+
+
+@lru_cache(maxsize=3)
+def _etc_encoder(kind):
+    """Resolve the installed wheel's encoder and its RGB byte ordering.
+
+    Older and current etcpak builds do not expose the same names or take
+    the same channel order. Use a single asymmetric 4×4 block per codec to
+    detect the contract before modifying a user's texture.
+    """
+    names, decoder_name = _ETCPAK_ETC[kind]
+    encoder = next((getattr(etcpak, name) for name in names if hasattr(etcpak, name)), None)
+    if encoder is None:
+        raise RuntimeError(f"Installed etcpak has no {kind} encoder")
+    decode = getattr(texture2ddecoder, decoder_name)
+    color = (32, 112, 224, 255)
+    pixel = Image.new("RGBA", (4, 4), color)
+    errors = []
+    for mode in ("RGBA", "BGRA"):
+        encoded = encoder(pixel.tobytes("raw", mode), 4, 4)
+        decoded = Image.frombytes("RGBA", (4, 4), decode(encoded, 4, 4), "raw", "BGRA")
+        errors.append((sum(abs(x - y) for x, y in zip(decoded.getpixel((0, 0))[:3], color[:3])), mode))
+    error, mode = min(errors)
+    if error > 70:
+        raise RuntimeError(f"etcpak {kind} encoder failed the color calibration")
+    return encoder, mode
+
+
+def _compress_etc(img, kind):
+    encoder, mode = _etc_encoder(kind)
+    return encoder(img.tobytes("raw", mode), img.width, img.height)
+
+
 def image_to_texture2d(img: Image.Image, target_texture_format: TF, flip: bool = True):
     if flip:
         img = img.transpose(Image.FLIP_TOP_BOTTOM)
@@ -151,18 +190,14 @@ def image_to_texture2d(img: Image.Image, target_texture_format: TF, flip: bool =
         img = _pad_image_to_compression_blocks(
             img, target_texture_format
         )
-        r, g, b, a = img.split()
-        raw_img = Image.merge("RGBA", (b, g, r, a)).tobytes()
-        enc_img = etcpak.compress_to_etc1(raw_img, img.width, img.height)
+        enc_img = _compress_etc(img, "etc1")
         tex_format = TF.ETC_RGB4
     elif target_texture_format == TF.ETC2_RGB:
         img = assert_rgba(img, target_texture_format)
         img = _pad_image_to_compression_blocks(
             img, target_texture_format
         )
-        r, g, b, a = img.split()
-        raw_img = Image.merge("RGBA", (b, g, r, a)).tobytes()
-        enc_img = etcpak.compress_to_etc2_rgb(raw_img, img.width, img.height)
+        enc_img = _compress_etc(img, "etc2_rgb")
         tex_format = TF.ETC2_RGB
     elif (
         target_texture_format in [TF.ETC2_RGBA8, TF.ETC2_RGBA8Crunched, TF.ETC2_RGBA1]
@@ -171,9 +206,7 @@ def image_to_texture2d(img: Image.Image, target_texture_format: TF, flip: bool =
         img = _pad_image_to_compression_blocks(
             img, target_texture_format
         )
-        r, g, b, a = img.split()
-        raw_img = Image.merge("RGBA", (b, g, r, a)).tobytes()
-        enc_img = etcpak.compress_to_etc2_rgba(raw_img, img.width, img.height)
+        enc_img = _compress_etc(img, "etc2_rgba")
         tex_format = TF.ETC2_RGBA8
     # A
     elif target_texture_format == TF.Alpha8:

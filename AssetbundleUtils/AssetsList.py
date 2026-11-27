@@ -2328,6 +2328,9 @@ class AssetBrowser:
                     self.obj_viewer = OBJViewer(self.preview_card)
                 self.preview_label.place_forget()
                 self.obj_viewer.place(relx=0, rely=0, relwidth=1, relheight=1)
+                realize = getattr(self.obj_viewer, "realize_preview", None)
+                if realize is not None:
+                    realize()
                 if kind == "effect":
                     self.obj_viewer.load_effect_payload(payload)
                     self.obj_viewer.set_loop(self.effect_loop_var.get())

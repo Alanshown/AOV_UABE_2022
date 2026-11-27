@@ -470,6 +470,10 @@ class Launcher:
 
 def main():
     multiprocessing.freeze_support()
+    if len(sys.argv) == 4 and sys.argv[1] == "--sample-fbx-worker":
+        from AssetbundleUtils.FbxImportWorker import worker_main
+        worker_main(*sys.argv[2:])
+        return
     root = TkinterDnD.Tk()
     Launcher(root)
     root.mainloop()

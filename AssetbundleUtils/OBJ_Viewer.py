@@ -3,13 +3,16 @@
 现代化3D模型预览器
 支持快速刷新、Ctrl+左键旋转、滚轮缩放等交互
 """
+import math
+import sys
+
 import numpy as np
 from PIL import Image
+if sys.platform.startswith("linux"):
+    from AssetbundleUtils.LinuxOpenGLFrame import LinuxOpenGLFrame as OpenGLFrame
+else:
+    from pyopengltk import OpenGLFrame
 from OpenGL.GL import *
-from OpenGL.GLUT import *
-from OpenGL.GLU import *
-from pyopengltk import OpenGLFrame
-import tkinter as tk
 
 # 现代化配色
 VIEWER_COLORS = {
@@ -114,13 +117,16 @@ class OBJViewer(OpenGLFrame):
         glMatrixMode(GL_PROJECTION)
         glLoadIdentity()
         aspect = width / height if height > 0 else 1.0
-        gluPerspective(45, aspect, 0.1, 10000.0)
+        near, far = 0.1, 10000.0
+        top = near * math.tan(math.radians(22.5))
+        glFrustum(-top * aspect, top * aspect, -top, top, near, far)
         glMatrixMode(GL_MODELVIEW)
     
     def on_resize(self, event):
         """窗口大小改变时重新设置投影"""
         if self.gl_initialized:
-            self.setup_projection()
+            if not hasattr(self, "realize_preview"):
+                self.setup_projection()
             if len(self.vertices) > 0:
                 self.after(5, self.redraw)
 
@@ -431,6 +437,8 @@ class OBJViewer(OpenGLFrame):
             return
         
         try:
+            if hasattr(self, "realize_preview"):
+                self.tkMakeCurrent()
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
             glLoadIdentity()
             
