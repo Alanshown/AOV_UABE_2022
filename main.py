@@ -25,7 +25,7 @@ from UI.ModernTheme import (
 from AssetbundleUtils.AssetsList import list_assets_window
 
 
-APP_VERSION = "2.4"
+APP_VERSION = "2.5"
 
 
 def get_resource_path(filename: str) -> str:
