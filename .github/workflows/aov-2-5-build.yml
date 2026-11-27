@@ -1,0 +1,79 @@
+name: AOV UABE 2.5 build and install verification
+on:
+  push:
+    branches: [release/2.5]
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Expected full commit SHA of the selected ref (40 lowercase hex characters)
+        required: true
+        type: string
+permissions:
+  contents: read
+env:
+  EXPECTED_COMMIT: ${{ inputs.commit || github.sha }}
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Provide Inno Setup
+        shell: pwsh
+        run: |
+          if (!(Test-Path (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe')) -and !(Get-Command ISCC.exe -ErrorAction SilentlyContinue)) {
+            choco install innosetup --version=6.5.4 -y --no-progress
+            if ($LASTEXITCODE) { throw 'Could not install Inno Setup' }
+          }
+      - name: Build and test exact source
+        shell: pwsh
+        run: ./packaging/windows/build.ps1 -ExpectedCommit $env:EXPECTED_COMMIT
+      - name: Verify real installation and upgrade on Windows
+        shell: pwsh
+        run: ./packaging/windows/verify-install.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AOV_UABE_2022-2.5-Windows-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+  linux:
+    runs-on: ubuntu-24.04
+    container: debian:13-slim
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Provide Debian 13 build and graphical smoke tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
+            ca-certificates git xz-utils binutils python3-venv python3-tk \
+            xvfb xauth x11-utils libgl1 libegl1 libegl-mesa0 libgl1-mesa-dri \
+            libx11-6 libxext6 libxrender1 libxft2 libfontconfig1 libfreetype6 libxcb1 \
+            fonts-noto-cjk fonts-dejavu-core
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Build and test exact source on Debian 13
+        run: |
+          python3 -m venv "$RUNNER_TEMP/aov-venv"
+          . "$RUNNER_TEMP/aov-venv/bin/activate"
+          sh packaging/linux/build.sh "$EXPECTED_COMMIT"
+      - name: Install and verify the actual Debian package
+        run: |
+          DEBIAN_FRONTEND=noninteractive apt-get install -y ./artifacts/AOV_UABE_2022-2.5-Linux-x64.deb
+          sh packaging/linux/verify-install.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AOV_UABE_2022-2.5-Debian13-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
