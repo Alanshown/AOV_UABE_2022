@@ -16,7 +16,7 @@ Image.open('icon.ico').convert('RGBA').resize((64,64), Image.Resampling.LANCZOS)
 PY
 cat > "$stage/DEBIAN/control" <<'EOF'
 Package: aov-uabe-2022
-Version: 2.5-1
+Version: 2.5-2
 Section: utils
 Priority: optional
 Architecture: amd64
