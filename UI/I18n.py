@@ -15,6 +15,10 @@ LANGUAGE_LABELS = {"zh-cn": "中文", "en": "English", "vn": "Tiếng Việt"}
 
 TEXT: Dict[str, Dict[str, str]] = {
     "zh-cn": {
+        "save_unverified_title": "输出已写出，有贴图未验证",
+        "save_unverified_output": "已输出 {count} 个 AssetBundle 到：{folder}",
+        "save_unverified_confirmation": "若原包有无法读取的贴图，工具只会原样保留已确认未修改的无效贴图记录，并提示其像素未验证。",
+        "unreadable_texture_summary": "有 {count} 张贴图的原包流数据地址无效。仅保留原始资产字节；像素未恢复，也没有通过像素校验。请用完整原包或导入正确的贴图后再验证。",
         "app_title": "AOV 资产工作室 2022",
         "brand_subtitle": "Unity 2022 · Arena of Valor 资产研究工具",
         "about": "关于",
@@ -205,6 +209,10 @@ TEXT: Dict[str, Dict[str, str]] = {
         "choose_file": "选择文件", "choose_folder": "选择文件夹", "confirm": "确认", "ack": "知道了",
     },
     "en": {
+        "save_unverified_title": "Output saved; some textures are unverified",
+        "save_unverified_output": "Wrote {count} AssetBundle(s) to: {folder}",
+        "save_unverified_confirmation": "If the source contains unreadable textures, unchanged invalid texture records may be preserved as-is. Their pixels remain unverified and will be listed in a warning.",
+        "unreadable_texture_summary": "{count} texture(s) had invalid stream addresses in the source bundle. Only their original asset bytes were preserved. Pixels were not recovered or verified. Use an intact source or import a correct replacement and verify again.",
         "app_title": "AOV Asset Workshop 2022",
         "brand_subtitle": "Unity 2022 · Arena of Valor asset research toolkit",
         "about": "About",
@@ -371,6 +379,10 @@ TEXT: Dict[str, Dict[str, str]] = {
         "folder": "Folder", "file": "File", "choose_file": "Choose file", "choose_folder": "Choose folder", "confirm": "Confirm", "ack": "OK",
     },
     "vn": {
+        "save_unverified_title": "Đã xuất tệp; một số kết cấu chưa được xác minh",
+        "save_unverified_output": "Đã ghi {count} AssetBundle vào: {folder}",
+        "save_unverified_confirmation": "Nếu gói nguồn có kết cấu không đọc được, chỉ bản ghi không hợp lệ chưa chỉnh sửa mới có thể được giữ nguyên; điểm ảnh chưa xác minh sẽ được báo rõ.",
+        "unreadable_texture_summary": "{count} kết cấu có địa chỉ luồng không hợp lệ trong gói gốc. Chỉ giữ dữ liệu gốc của tài nguyên; điểm ảnh chưa được khôi phục hoặc kiểm tra. Hãy dùng gói gốc nguyên vẹn hoặc nhập kết cấu thay thế đúng rồi kiểm tra lại.",
         "app_title": "AOV Asset Workshop 2022",
         "brand_subtitle": "Unity 2022 · Công cụ nghiên cứu tài nguyên Arena of Valor",
         "about": "Giới thiệu",

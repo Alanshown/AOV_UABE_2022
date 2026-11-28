@@ -21,6 +21,6 @@ python3 -m venv .release-venv
 sh packaging/linux/build.sh <full-sha>
 ```
 
-The artifact is `AOV_UABE_2022-2.5-Linux-x64.deb`, Debian version `2.5-1`.
+The artifact is `AOV_UABE_2022-2.5-Linux-x64.deb`, Debian version `2.5-2`.
 The app displays 2.5. The release check verifies the package version is
 strictly newer than the previously shipped `2.4-2`.

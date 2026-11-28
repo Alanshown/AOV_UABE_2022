@@ -26,8 +26,8 @@ python -m PyInstaller --noconfirm --clean packaging/linux/AOV_UABE_2022.spec
 sh packaging/linux/package.sh
 deb=artifacts/AOV_UABE_2022-2.5-Linux-x64.deb
 test "$(dpkg-deb -f "$deb" Package)" = aov-uabe-2022
-test "$(dpkg-deb -f "$deb" Version)" = 2.5-1
+test "$(dpkg-deb -f "$deb" Version)" = 2.5-2
 test "$(dpkg-deb -f "$deb" Architecture)" = amd64
-dpkg --compare-versions 2.5-1 gt 2.4-2
+dpkg --compare-versions 2.5-2 gt 2.5-1
 (cd artifacts && sha256sum AOV_UABE_2022-2.5-Linux-x64.deb > SHA256SUMS.txt)
 printf 'commit: %s\nruntime: %s\nlinux: %s\n' "$actual" "$(python --version)" "$PRETTY_NAME" > artifacts/SOURCE-LINUX.txt

@@ -32,6 +32,7 @@ from AssetbundleUtils.AssetBundleMetadata import (
 from AssetbundleUtils.BundleProject import (
     export_bundle_project, rebuild_bundle_project,
     recover_unambiguous_texture_streams, repair_sprite_atlas_preloads,
+    verify_preserved_texture_raw, _texture_identity,
 )
 from AssetbundleUtils.BundleSaveTransaction import publish_verified_bundle_batch
 from AssetbundleUtils.MeshImport import (
@@ -54,6 +55,16 @@ from UI.ModernTheme import (
 
 
 list_window = None
+
+
+def _unreadable_texture_warning(rows) -> str:
+    if not rows:
+        return ""
+    lines = [tr("unreadable_texture_summary", count=len(rows))]
+    for row in rows[:8]:
+        prefix = f"{row['bundle']}: " if row.get("bundle") else ""
+        lines.append(f"• {prefix}{row['message']}")
+    return "\n".join(lines)
 
 
 def _safe_filename(value: str) -> str:
@@ -646,6 +657,11 @@ class AssetBrowser:
             font=FONTS["body"], justify="center"
         )
         self.preview_label.place(relx=0.5, rely=0.54, anchor="center")
+        self.preview_card.bind(
+            "<Configure>",
+            lambda event: self.preview_label.configure(wraplength=max(100, event.width - 32)),
+            add="+",
+        )
         self.obj_viewer = None
 
         detail = tk.Frame(
@@ -3065,6 +3081,13 @@ class AssetBrowser:
                         f"• {_display_asset_text(source_path)}: {message}"
                     )
                 sections.append("\n".join([tr("bundle_project_export_errors"), *errors]))
+            unreadable = [
+                dict(row, bundle=os.path.basename(item["backup"]))
+                for item in exported for row in item.get("unreadable_textures", [])
+            ]
+            if unreadable:
+                sections.append(_unreadable_texture_warning(unreadable))
+                kind = "warning"
             show_dialog(self.window, tr(title_key), "\n\n".join(sections), kind)
 
         self._submit_operation("export_bundle_project", worker, show_result)
@@ -3129,6 +3152,9 @@ class AssetBrowser:
                 path=info["path"],
             )
             warning = info.get("project_sync_warning")
+            resource_warning = _unreadable_texture_warning(info.get("unreadable_textures", []))
+            if resource_warning:
+                body += "\n\n" + resource_warning
             if warning:
                 show_dialog(
                     self.window,
@@ -3137,7 +3163,10 @@ class AssetBrowser:
                     "warning",
                 )
             else:
-                show_dialog(self.window, tr("bundle_project_rebuilt_title"), body)
+                if resource_warning:
+                    show_dialog(self.window, tr("save_unverified_title"), body, "warning")
+                else:
+                    show_dialog(self.window, tr("bundle_project_rebuilt_title"), body)
 
         self._submit_operation("rebuild_bundle_project", worker, success)
 
@@ -3274,7 +3303,8 @@ class AssetBrowser:
         if not output or not show_dialog(
             self.window,
             tr("save_verify"),
-            tr("fingerprint_save_verify_body" if fingerprint else "save_verify_body"),
+            tr("fingerprint_save_verify_body" if fingerprint else "save_verify_body")
+            + "\n\n" + tr("save_unverified_confirmation"),
             confirm=True,
         ):
             return
@@ -3295,7 +3325,13 @@ class AssetBrowser:
             source_bundle = getattr(
                 env, "file", next(iter(env.files.values()))
             )
-            recover_unambiguous_texture_streams(env)
+            unreadable = {}
+            recover_unambiguous_texture_streams(
+                env, preserve_out_of_range=unreadable,
+                unchanged=lambda obj: (
+                    obj.data is None and (index, int(obj.path_id)) not in self.modified
+                ),
+            )
             repair_sprite_atlas_preloads(env)
             # AssetBundle block compression is lossless.  Do not silently
             # transcode RGBA32 atlases to ETC2 here: that makes the output
@@ -3317,7 +3353,7 @@ class AssetBrowser:
                                  for path_id in expected_modified}
             texture_expectations = {}
             for path_id, current in current_objects.items():
-                if current.type.name != "Texture2D":
+                if current.type.name != "Texture2D" or _texture_identity(current) in unreadable:
                     continue
                 texture = current.read(False)
                 texture_expectations[path_id] = {
@@ -3363,6 +3399,7 @@ class AssetBrowser:
             missing = expected_modified.difference(reloaded_map)
             if missing:
                 raise ValueError(f"Missing PathID after reload: {sorted(missing)}")
+            verify_preserved_texture_raw(reloaded, unreadable)
             for path_id, expectation in texture_expectations.items():
                 checked = reloaded_map.get(path_id)
                 if checked is None or checked.type.name != "Texture2D":
@@ -3410,7 +3447,8 @@ class AssetBrowser:
                 dir=staging, prefix=f"{index}-", suffix=".bundle", delete=False
             ) as handle:
                 handle.write(data)
-            return os.path.basename(self.paths[index]), handle.name
+            name = os.path.basename(self.paths[index])
+            return (name, handle.name), [dict(row, bundle=name) for row in unreadable.values()]
 
         def worker():
             indexes = [index for index, env in enumerate(self.env_list) if env is not None]
@@ -3428,18 +3466,19 @@ class AssetBrowser:
                             results[index] = future.result()
                         except Exception as exc:
                             raise RuntimeError(f"{os.path.basename(self.paths[index])}: {exc}") from exc
-                return publish_verified_bundle_batch(output, [results[index] for index in indexes])
+                targets = publish_verified_bundle_batch(output, [results[index][0] for index in indexes])
+                return targets, [row for index in indexes for row in results[index][1]]
 
         future = self.executor.submit(worker)
         future.add_done_callback(
             lambda done: self.events.put(
-                ("save_done", done.result(), None, fingerprint)
+                ("save_done", done.result()[0], None, fingerprint, done.result()[1])
                 if done.exception() is None
                 else ("save_done", None, str(done.exception()), fingerprint)
             )
         )
 
-    def _save_done(self, targets, error, fingerprint=False):
+    def _save_done(self, targets, error, fingerprint=False, unreadable=()):
         self._finish_operation()
         self.progress.stop()
         self.progress.pack_forget()
@@ -3449,15 +3488,19 @@ class AssetBrowser:
             self._set_status("save_validation_failed")
             show_dialog(self.window, tr("save_failed"), error, "error")
             return
+        warning = _unreadable_texture_warning(unreadable)
+        if warning:
+            self._set_status("save_unverified_title")
+            body = tr("save_unverified_output", count=len(targets), folder=os.path.dirname(targets[0]))
+            show_dialog(self.window, tr("save_unverified_title"), body + "\n\n" + warning, "warning")
+            return
         self._set_status("save_complete", count=len(targets))
-        show_dialog(
-            self.window, tr("save_success"),
-            tr(
-                "fingerprint_save_success_body" if fingerprint else "save_success_body",
-                count=len(targets),
-                folder=os.path.dirname(targets[0]) if targets else ""
-            ),
+        body = tr(
+            "fingerprint_save_success_body" if fingerprint else "save_success_body",
+            count=len(targets),
+            folder=os.path.dirname(targets[0]) if targets else "",
         )
+        show_dialog(self.window, tr("save_success"), body)
 
     def close(self):
         global list_window

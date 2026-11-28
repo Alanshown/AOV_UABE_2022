@@ -736,7 +736,23 @@ def _export_bundle_project_into(
         shutil.copy2(source_path, backup_path)
     else:
         _write_bytes(backup_path, source_bytes)
-    environment = UnityPy_AOV.load(backup_path)
+    # Keep the source handle scoped to this staging operation rather than
+    # relying on environment/reader garbage collection. On Windows an open
+    # backup handle prevents the outer atomic project-directory rename.
+    with open(backup_path, "rb") as handle:
+        environment = UnityPy_AOV.Environment()
+        environment.path = backup_dir
+        environment.file = environment.load_file(handle, name=backup_path)
+        return _write_bundle_project_from_environment(
+            source_path, project_dir, export_decoded,
+            backup_path, internal_dir, assets_root, environment,
+        )
+
+
+def _write_bundle_project_from_environment(
+    source_path, project_dir, export_decoded,
+    backup_path, internal_dir, assets_root, environment,
+):
     bundle = environment.file
     _validate_project_object_identity(environment)
     internal_names = set()
@@ -745,7 +761,10 @@ def _export_bundle_project_into(
         if normalized_name in internal_names:
             raise ValueError(f"Internal bundle node filename collision for {name!r}")
         internal_names.add(normalized_name)
-    recover_unambiguous_texture_streams(environment)
+    unreadable = {}
+    recover_unambiguous_texture_streams(
+        environment, preserve_out_of_range=unreadable,
+    )
 
     nodes = []
     for name, node in bundle.files.items():
@@ -795,6 +814,10 @@ def _export_bundle_project_into(
         relation = _asset_relationship(obj)
         if relation is not None:
             relationships.append(relation)
+        if type_name == "Texture2D" and _texture_identity(obj) in unreadable:
+            item["resource_warning"] = unreadable[_texture_identity(obj)]["message"]
+            assets.append(item)
+            continue
         try:
             parsed = obj.read(False)
             stream = _export_stream_payload(
@@ -858,6 +881,7 @@ def _export_bundle_project_into(
         "types": len(manifest["inventory"]),
         "nodes": len(nodes),
         "relationship_issues": len(atlas_validation["issues"]),
+        "unreadable_textures": list(unreadable.values()),
     }
 
 
@@ -3279,7 +3303,26 @@ def _canonical_resource_name(assets_file, bundle) -> str:
     return preferred
 
 
-def recover_unambiguous_texture_streams(environment) -> set[int]:
+def _texture_identity(obj) -> tuple[str, int]:
+    return str(obj.assets_file.name or ""), int(obj.path_id)
+
+
+def _texture_backup_hashes(environment) -> dict:
+    """Pin the immutable RAW only for existing blank-stream textures."""
+    hashes = {}
+    for obj in environment.objects:
+        if obj.type.name != "Texture2D":
+            continue
+        texture = obj.read(False)
+        stream = texture.m_StreamData
+        if stream is not None and stream.size > 0 and not stream.path and not texture._image_data:
+            hashes[_texture_identity(obj)] = _sha256(obj.get_raw_data())
+    return hashes
+
+
+def recover_unambiguous_texture_streams(
+    environment, *, preserve_out_of_range=None, unchanged=None,
+) -> set[int]:
     """Repair blank Texture2D locators only with corroborating CAB evidence.
 
     A positive offset/length cannot establish that the serialized-file reader
@@ -3351,12 +3394,33 @@ def recover_unambiguous_texture_streams(environment) -> set[int]:
                 or any(other is not obj and start < right and left < end
                        for other, left, right, _, _ in entries)
             ):
-                raise ValueError(
+                message = (
                     f"Texture2D {obj.path_id} has an empty stream path; "
                     f"cannot safely resolve {size} bytes at offset {start} "
                     f"in {owner or '<unknown CAB>'}. Supply the original bundle "
                     "and its resource files."
                 )
+                # An out-of-bounds, unaddressed stream cannot be verified.
+                # Preserve its opaque RAW only when this caller can establish
+                # it has not edited the object; never invent or borrow pixels.
+                node_length = max((
+                    int(getattr(node, "Length", 0) or
+                        getattr(getattr(node, "reader", None), "Length", 0) or 0)
+                    for node in bundle.files.values()
+                ), default=0)
+                if (preserve_out_of_range is None
+                        or not (start < 0 or end > node_length)
+                        or (unchanged is not None and not unchanged(obj))):
+                    raise ValueError(message)
+                preserve_out_of_range[_texture_identity(obj)] = {
+                    "path_id": int(obj.path_id),
+                    "cab": owner,
+                    "offset": start,
+                    "size": size,
+                    "raw_sha256": _sha256(obj.get_raw_data()),
+                    "message": message,
+                }
+                continue
             old = {"kind": "streaming_info", "path": "", "offset": start, "size": size}
             repairs.append((obj, old, {**old, "path": path}))
 
@@ -3368,6 +3432,19 @@ def recover_unambiguous_texture_streams(environment) -> set[int]:
     for obj, raw in updated:
         obj.set_raw_data(raw)
     return {int(obj.path_id) for obj, _ in updated}
+
+
+def verify_preserved_texture_raw(environment, expected) -> None:
+    """Check that every opaque Texture2D stayed in the same CAB byte-for-byte."""
+    if not expected:
+        return
+    actual = {
+        _texture_identity(obj): _sha256(obj.get_raw_data())
+        for obj in environment.objects
+        if obj.type.name == "Texture2D" and _texture_identity(obj) in expected
+    }
+    if actual != {key: row["raw_sha256"] for key, row in expected.items()}:
+        raise ValueError("An unreadable Texture2D changed during serialization")
 
 
 def _rebuild_stream_resources(
@@ -4066,12 +4143,26 @@ def _rebuild_reserved_project(
     environment = _load_verified_project_backup(project_dir, manifest)
     bundle = environment.file
     _validate_project_object_identity(environment)
+    baseline_texture_hashes = _texture_backup_hashes(environment)
     _restore_resource_nodes(bundle, project_dir, manifest)
     _install_imported_types(environment, manifest)
     edited = _apply_project_objects(
         environment, project_dir, manifest
     )
-    recovered_texture_ids = recover_unambiguous_texture_streams(environment)
+    unreadable = {}
+    recovered_texture_ids = recover_unambiguous_texture_streams(
+        environment, preserve_out_of_range=unreadable,
+        unchanged=lambda obj: (
+            baseline_texture_hashes.get(_texture_identity(obj)) == _sha256(obj.get_raw_data())
+        ),
+    )
+    warnings_by_id = {row["path_id"]: row for row in unreadable.values()}
+    for item in edited["assets"]:
+        warning = warnings_by_id.get(item["path_id"]) if item["type"] == "Texture2D" else None
+        if warning:
+            item["resource_warning"] = warning["message"]
+        else:
+            item.pop("resource_warning", None)
     stream_sync = (
         _rebuild_stream_resources(
             environment, project_dir, manifest, edited["assets"],
@@ -4118,7 +4209,7 @@ def _rebuild_reserved_project(
         )
     texture_expectations = {}
     for obj in environment.objects:
-        if obj.type.name != "Texture2D":
+        if obj.type.name != "Texture2D" or _texture_identity(obj) in unreadable:
             continue
         texture = obj.read(False)
         texture_expectations[int(obj.path_id)] = {
@@ -4160,6 +4251,7 @@ def _rebuild_reserved_project(
         if obj is None or _sha256(obj.get_raw_data()) != expected_hash:
             raise ValueError(f"Mesh {path_id} payload changed during bundle rebuild")
         validate_mesh_payload(obj)
+    verify_preserved_texture_raw(verified, unreadable)
     for path_id, expectation in texture_expectations.items():
         obj = verified_objects.get(path_id)
         if obj is None or obj.type.name != "Texture2D":
@@ -4240,7 +4332,8 @@ def _rebuild_reserved_project(
         "atlas_sync": edited.get("atlas_sync", {}),
         "stream_sync": stream_sync,
         "optimized_textures": optimized,
-        "texture_quality_preserved": True,
+        "texture_quality_preserved": not unreadable,
+        "unreadable_textures": list(unreadable.values()),
         "added_preload_path_ids": sorted(set(added_preloads)),
         "relationship_issues": 0,
         "reference_issues": 0,

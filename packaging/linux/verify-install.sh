@@ -3,7 +3,7 @@
 # Launch the installed application under a clean profile and an Xvfb display.
 set -eu
 cd "$(dirname "$0")/../.."
-test "$(dpkg-query -W -f='${Version}' aov-uabe-2022)" = 2.5-1
+test "$(dpkg-query -W -f='${Version}' aov-uabe-2022)" = 2.5-2
 test -x /usr/bin/aov-uabe-2022
 if [ "${1:-}" = --under-xvfb ]; then
     scratch=$2
