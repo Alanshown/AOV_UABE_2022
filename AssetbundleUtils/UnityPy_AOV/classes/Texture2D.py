@@ -49,11 +49,16 @@ class Texture2D(Texture):
     def image_data(self):
         if (not self._image_data and self.m_StreamData is not None
                 and self.m_StreamData.size > 0):
+            stream = self.m_StreamData
+            if not stream.path:
+                raise FileNotFoundError(
+                    f"Texture2D pixel data unavailable: empty stream path in "
+                    f"{self.assets_file.name} (offset {stream.offset}, "
+                    f"size {stream.size}). Supply the intact original bundle "
+                    "and resources, or import a correct replacement texture."
+                )
             self._image_data = get_resource_data(
-                self.m_StreamData.path,
-                self.assets_file,
-                self.m_StreamData.offset,
-                self.m_StreamData.size,
+                stream.path, self.assets_file, stream.offset, stream.size,
             )
         return self._image_data
 
