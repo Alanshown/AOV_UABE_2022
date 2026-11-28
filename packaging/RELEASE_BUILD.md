@@ -60,9 +60,9 @@ sudo apt install ./artifacts/AOV_UABE_2022-2.5-Linux-x64.deb
 sh packaging/linux/verify-install.sh
 ```
 
-The .deb uses package version `2.5-1` with app display version `2.5` and
+The .deb uses package version `2.5-2` with app display version `2.5` and
 stable install paths; package version checks require it to sort above
-the previous `2.4-2`. A fresh install and launch smoke do not by themselves
+the previous `2.5-1`. A fresh install and launch smoke do not by themselves
 verify every Linux desktop, package manager, 3D preview, or input bundle.
 
 See [GitHub manual workflow rules](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)
