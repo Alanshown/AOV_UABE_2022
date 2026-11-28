@@ -122,7 +122,7 @@ def test_empty_texture_with_zero_bytes_does_not_read_resource(tmp_path):
 def test_legacy_export_without_sidecar_restores_only_recovered_payload(tmp_path, monkeypatch):
     source = texture_bundle(tmp_path)
     with monkeypatch.context() as old_export:
-        old_export.setattr(project, "recover_unambiguous_texture_streams", lambda env: set())
+        old_export.setattr(project, "recover_unambiguous_texture_streams", lambda env, **kwargs: set())
         info = project.export_bundle_project(
             str(source), str(tmp_path / "legacy"), export_decoded=False
         )

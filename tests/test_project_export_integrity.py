@@ -169,3 +169,30 @@ def test_conflicting_json_and_filename_rename_is_explicit_and_keeps_files(tmp_pa
         P.rebuild_bundle_project(str(root), str(output))
     assert not output.exists()
     assert P._project_snapshot(str(root)) == before
+
+
+def test_staged_bundle_backup_is_closed_before_publish(tmp_path, monkeypatch):
+    import os
+    from AssetbundleUtils import BundleProject as project, UnityPy_AOV
+    from tests.fixtures import mesh_object, bundle_bytes
+
+    source = tmp_path / "control.assetbundle"
+    source.write_bytes(bundle_bytes(mesh_object()))
+    seen = []
+    load = UnityPy_AOV.Environment.load_file
+    rename = os.rename
+
+    def observe_load(self, file, parent=None, name=None):
+        if name and "backup" in name and hasattr(file, "closed"):
+            seen.append(file)
+            assert not file.closed
+        return load(self, file, parent, name)
+
+    def observe_rename(src, dst, *args, **kwargs):
+        assert seen and all(handle.closed for handle in seen), "backup handle is open"
+        return rename(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(UnityPy_AOV.Environment, "load_file", observe_load)
+    monkeypatch.setattr(project.os, "rename", observe_rename)
+    out = project.export_bundle_project(str(source), str(tmp_path / "export"))
+    assert Path(out["backup"]).read_bytes() == source.read_bytes()
